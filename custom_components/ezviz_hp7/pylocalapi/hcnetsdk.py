@@ -17,7 +17,7 @@ import base64
 import binascii
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import IntEnum
 import hashlib
@@ -618,6 +618,8 @@ class HcNetSdkDvrCommand(IntEnum):
     """HCNetSDK ``NET_DVR_Get/SetDVRConfig`` command IDs seen in the APK."""
 
     GET_DEVICE_CFG = 100
+    GET_TIME_CFG = 118
+    GET_NTP_CFG = 224
     GET_NET_CFG = 1000
     GET_PIC_CFG_V30 = 1002
     GET_RECORD_CFG_V30 = 1004
@@ -628,6 +630,7 @@ class HcNetSdkDvrCommand(IntEnum):
     GET_HD_CFG = 1054
     GET_CAMERA_PARAM_CFG = 1067
     SET_CAMERA_PARAM_CFG = 1068
+    GET_DEVICE_CFG_V40 = 1100
     GET_AP_INFO_LIST = 305
     SET_WIFI_CFG = 306
     GET_WIFI_CFG = 307
@@ -649,6 +652,30 @@ HCNETSDK_DVR_CONFIG_COMMAND_PORT_COMMAND_IDS: Mapping[int, int] = {
     # Native trace: NET_DVR_GetDVRConfig(login, 305, -1, NET_DVR_AP_INFO_LIST)
     # dispatches as an empty 0x20140 command and returns NET_DVR_AP_INFO_LIST.
     HcNetSdkDvrCommand.GET_AP_INFO_LIST: 0x20140,
+    # Native trace: NET_DVR_GetDVRConfig(login, 307, -1, NET_DVR_WIFI_CFG)
+    # dispatches as an empty 0x20141 command and returns NET_DVR_WIFI_CFG.
+    # This may contain station credentials, so no typed convenience parser is exposed.
+    HcNetSdkDvrCommand.GET_WIFI_CFG: 0x20141,
+    # Native trace: NET_DVR_GetDVRConfig(login, 1000, -1, NET_DVR_NETCFG_V30)
+    # dispatches as an empty 0x110000 command.
+    HcNetSdkDvrCommand.GET_NET_CFG: 0x110000,
+    # Native trace: NET_DVR_GetDVRConfig(login, 1004, 1, NET_DVR_RECORD_V30)
+    # dispatches as 0x110020 with a channel tail.
+    HcNetSdkDvrCommand.GET_RECORD_CFG_V30: 0x110020,
+    # Native binary dispatch: libHCGeneralCfgMgr ConfigUserCfg and
+    # libHCCoreDevCfg DetermineCompatibleInfo carry the GET/SET user-config
+    # pair as 0x110030/0x110031. Available live devices rejected the read
+    # before returning a body, so parser coverage uses synthetic fixtures.
+    HcNetSdkDvrCommand.GET_USER_CFG_V30: 0x110030,
+    # Native trace: NET_DVR_GetDVRConfig(login, 118, -1, NET_DVR_TIME)
+    # dispatches as an empty 0x20500 command.
+    HcNetSdkDvrCommand.GET_TIME_CFG: 0x20500,
+    # Native trace: NET_DVR_GetDVRConfig(login, 224, -1, NET_DVR_NTPPARA)
+    # dispatches as an empty 0x20112 command.
+    HcNetSdkDvrCommand.GET_NTP_CFG: 0x20112,
+    # Native trace: NET_DVR_GetDVRConfig(login, 1100, -1, NET_DVR_DEVICECFG_V40)
+    # dispatches as an empty 0x1110c2 command.
+    HcNetSdkDvrCommand.GET_DEVICE_CFG_V40: 0x1110C2,
     # Native trace: NET_DVR_GetDVRConfig(login, 1067, 1, NET_DVR_CAMERAPARAMCFG)
     # dispatches as an empty 0x111096 command and returns NET_DVR_CAMERAPARAMCFG.
     HcNetSdkDvrCommand.GET_CAMERA_PARAM_CFG: 0x111096,
@@ -664,9 +691,19 @@ HCNETSDK_DVR_CONFIG_COMMAND_PORT_COMMAND_IDS: Mapping[int, int] = {
     # Native trace: NET_DVR_GetDVRConfig(login, 1040, 1,
     # NET_DVR_COMPRESSIONCFG_V30) dispatches as 0x110040 with a channel tail.
     HcNetSdkDvrCommand.GET_COMPRESSION_CFG_V30: 0x110040,
+    # Native sidecar trace: NET_DVR_GetDVRConfig(login, 1002, 1,
+    # NET_DVR_PICCFG_V30) dispatches through the same 0x110010 channel-tailed
+    # command as the app's V40 picture-config path; some device firmware still
+    # rejects the public V30 command while accepting V40.
+    HcNetSdkDvrCommand.GET_PIC_CFG_V30: 0x110010,
     # Native trace: NET_DVR_GetDVRConfig(login, 6179, 1, NET_DVR_PICCFG_V40)
     # dispatches as 0x110010 with a channel tail.
     HcNetSdkDvrCommand.GET_PIC_CFG_V40: 0x110010,
+    # Native trace: NET_DVR_GetDVRConfig(login, 3398, 1,
+    # NET_DVR_EZVIZ_ACCESS_CFG) dispatches as 0x113420. Native app traces carry
+    # a volatile 16-byte tail, but pure-Python empty-tail live smoke succeeds.
+    # The response may contain access/security config, so no typed parser is exposed.
+    HcNetSdkDvrCommand.GET_EZVIZ_ACCESS_CFG: 0x113420,
 }
 
 HCNETSDK_DVR_CONFIG_CHANNEL_TAIL_COMMANDS: frozenset[int] = frozenset(
@@ -675,20 +712,138 @@ HCNETSDK_DVR_CONFIG_CHANNEL_TAIL_COMMANDS: frozenset[int] = frozenset(
         HcNetSdkDvrCommand.GET_AUDIO_INPUT_PARAM,
         HcNetSdkDvrCommand.GET_AUDIOOUT_VOLUME,
         HcNetSdkDvrCommand.GET_COMPRESSION_CFG_V30,
+        HcNetSdkDvrCommand.GET_PIC_CFG_V30,
         HcNetSdkDvrCommand.GET_PIC_CFG_V40,
+        HcNetSdkDvrCommand.GET_RECORD_CFG_V30,
     }
 )
 HCNETSDK_HD_CFG_MIN_SIZE = 4
+HCNETSDK_HD_CFG_HEADER_SIZE = 8
+HCNETSDK_HD_CFG_DISK_COUNT = 33
+HCNETSDK_HD_CFG_DISK_OFFSET = 8
+HCNETSDK_HD_CFG_DISK_SIZE = 144
+HCNETSDK_HD_CFG_DISK_HD_NO_OFFSET = 0
+HCNETSDK_HD_CFG_DISK_CAPACITY_OFFSET = 4
+HCNETSDK_HD_CFG_DISK_FREE_SPACE_OFFSET = 8
+HCNETSDK_HD_CFG_DISK_STATUS_OFFSET = 12
+HCNETSDK_HD_CFG_DISK_ATTR_OFFSET = 16
+HCNETSDK_HD_CFG_DISK_TYPE_OFFSET = 17
+HCNETSDK_HD_CFG_DISK_DRIVER_OFFSET = 18
+HCNETSDK_HD_CFG_DISK_GROUP_OFFSET = 20
+HCNETSDK_HD_CFG_DISK_RECYCLING_OFFSET = 24
+HCNETSDK_HD_CFG_DISK_STORAGE_TYPE_OFFSET = 28
+HCNETSDK_HD_CFG_DISK_PICTURE_CAPACITY_OFFSET = 32
+HCNETSDK_HD_CFG_DISK_FREE_PICTURE_SPACE_OFFSET = 36
 HCNETSDK_WIFI_AP_INFO_LIST_HEADER_SIZE = 8
 HCNETSDK_WIFI_AP_INFO_ENTRY_SIZE = 52
 HCNETSDK_WIFI_AP_INFO_SSID_SIZE = 36
+HCNETSDK_TIME_CFG_SIZE = 24
+HCNETSDK_NTP_CFG_SIZE = 80
+HCNETSDK_NTP_SERVER_SIZE = 64
+HCNETSDK_NTP_INTERVAL_OFFSET = 64
+HCNETSDK_NTP_ENABLE_OFFSET = 66
+HCNETSDK_NTP_TIME_DIFFERENCE_HOURS_OFFSET = 67
+HCNETSDK_NTP_TIME_DIFFERENCE_MINUTES_OFFSET = 68
+HCNETSDK_NTP_PORT_OFFSET = 70
+HCNETSDK_NETCFG_V30_MIN_SIZE = 184
+HCNETSDK_NETCFG_V30_ETHERNET_COUNT = 2
+HCNETSDK_NETCFG_V30_ETHERNET_OFFSET = 4
+HCNETSDK_NETCFG_V30_ETHERNET_SIZE = 48
+HCNETSDK_NETCFG_V30_IP_SIZE = 16
+HCNETSDK_NETCFG_V30_ETHERNET_NET_INTERFACE_OFFSET = 32
+HCNETSDK_NETCFG_V30_ETHERNET_PORT_OFFSET = 36
+HCNETSDK_NETCFG_V30_ETHERNET_MTU_OFFSET = 38
+HCNETSDK_NETCFG_V30_ETHERNET_MAC_OFFSET = 40
+HCNETSDK_NETCFG_V30_MANAGE_HOST_IP_OFFSET = (
+    HCNETSDK_NETCFG_V30_ETHERNET_OFFSET
+    + HCNETSDK_NETCFG_V30_ETHERNET_COUNT * HCNETSDK_NETCFG_V30_ETHERNET_SIZE
+)
+HCNETSDK_NETCFG_V30_MANAGE_HOST_PORT_OFFSET = (
+    HCNETSDK_NETCFG_V30_MANAGE_HOST_IP_OFFSET + HCNETSDK_NETCFG_V30_IP_SIZE
+)
+HCNETSDK_NETCFG_V30_IP_SERVER_OFFSET = (
+    HCNETSDK_NETCFG_V30_MANAGE_HOST_PORT_OFFSET + 4
+)
+HCNETSDK_NETCFG_V30_MULTICAST_IP_OFFSET = (
+    HCNETSDK_NETCFG_V30_IP_SERVER_OFFSET + HCNETSDK_NETCFG_V30_IP_SIZE
+)
+HCNETSDK_NETCFG_V30_GATEWAY_IP_OFFSET = (
+    HCNETSDK_NETCFG_V30_MULTICAST_IP_OFFSET + HCNETSDK_NETCFG_V30_IP_SIZE
+)
+HCNETSDK_NETCFG_V30_NFS_IP_OFFSET = (
+    HCNETSDK_NETCFG_V30_GATEWAY_IP_OFFSET + HCNETSDK_NETCFG_V30_IP_SIZE
+)
+HCNETSDK_DEVICE_CFG_V40_MIN_SIZE = 164
+HCNETSDK_DEVICE_CFG_V40_NAME_OFFSET = 4
+HCNETSDK_DEVICE_CFG_V40_NAME_SIZE = 32
+HCNETSDK_DEVICE_CFG_V40_SERIAL_OFFSET = 44
+HCNETSDK_DEVICE_CFG_V40_SERIAL_SIZE = 48
+HCNETSDK_DEVICE_CFG_V40_TYPE_NAME_OFFSET = 140
+HCNETSDK_DEVICE_CFG_V40_TYPE_NAME_SIZE = 24
+HCNETSDK_RECORD_CFG_V30_SIZE = 508
+HCNETSDK_RECORD_CFG_V30_DAY_COUNT = 7
+HCNETSDK_RECORD_CFG_V30_SEGMENTS_PER_DAY = 8
+HCNETSDK_RECORD_CFG_V30_ALL_DAY_OFFSET = 8
+HCNETSDK_RECORD_CFG_V30_ALL_DAY_SIZE = 4
+HCNETSDK_RECORD_CFG_V30_SCHEDULE_OFFSET = (
+    HCNETSDK_RECORD_CFG_V30_ALL_DAY_OFFSET
+    + HCNETSDK_RECORD_CFG_V30_DAY_COUNT * HCNETSDK_RECORD_CFG_V30_ALL_DAY_SIZE
+)
+HCNETSDK_RECORD_CFG_V30_SCHEDULE_SIZE = 8
+HCNETSDK_RECORD_CFG_V30_TRAILER_OFFSET = (
+    HCNETSDK_RECORD_CFG_V30_SCHEDULE_OFFSET
+    + HCNETSDK_RECORD_CFG_V30_DAY_COUNT
+    * HCNETSDK_RECORD_CFG_V30_SEGMENTS_PER_DAY
+    * HCNETSDK_RECORD_CFG_V30_SCHEDULE_SIZE
+)
+HCNETSDK_USER_CFG_V30_USER_COUNT = 32
+HCNETSDK_USER_CFG_V30_ENTRY_SIZE = 792
+HCNETSDK_USER_CFG_V30_USERNAME_SIZE = 32
+HCNETSDK_USER_CFG_V30_PASSWORD_SIZE = 16
+HCNETSDK_USER_CFG_V30_LOCAL_RIGHT_SIZE = 32
+HCNETSDK_USER_CFG_V30_REMOTE_RIGHT_SIZE = 32
+HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE = 64
+HCNETSDK_USER_CFG_V30_USER_IP_V4_SIZE = 16
+HCNETSDK_USER_CFG_V30_USER_IP_V6_SIZE = 128
+HCNETSDK_USER_CFG_V30_MAC_SIZE = 6
+HCNETSDK_USER_CFG_V30_RESERVED_SIZE = 17
+HCNETSDK_USER_CFG_V30_MIN_SIZE = 4 + HCNETSDK_USER_CFG_V30_ENTRY_SIZE
+HCNETSDK_USER_CFG_V30_MAX_SIZE = (
+    4 + HCNETSDK_USER_CFG_V30_USER_COUNT * HCNETSDK_USER_CFG_V30_ENTRY_SIZE
+)
 HCNETSDK_CAMERA_PARAM_CFG_MIN_SIZE = 12
+HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET = 52
+HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET = 72
+HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET = 84
 HCNETSDK_WIFI_CONNECT_STATUS_MIN_SIZE = 8
 HCNETSDK_AUDIO_INPUT_PARAM_SIZE = 8
 HCNETSDK_AUDIOOUT_VOLUME_MIN_SIZE = 5
+HCNETSDK_SHIFTED_SIZE_ZERO_SUFFIX = b"\x00\x00"
 HCNETSDK_COMPRESSION_CFG_MIN_SIZE = 32
+HCNETSDK_COMPRESSION_INFO_V30_SIZE = 28
+HCNETSDK_COMPRESSION_CFG_NORMAL_OFFSET = 4
+HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET = 32
+HCNETSDK_COMPRESSION_CFG_EVENT_OFFSET = 60
+HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET = 88
 HCNETSDK_PIC_CFG_MIN_SIZE = 36
 HCNETSDK_PIC_CFG_CHANNEL_NAME_SIZE = 32
+HCNETSDK_PIC_CFG_VIDEO_FORMAT_OFFSET = 36
+HCNETSDK_PIC_CFG_BRIGHTNESS_OFFSET = 40
+HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET = 104
+HCNETSDK_PIC_CFG_NAME_POSITION_OFFSET = 108
+HCNETSDK_PIC_CFG_ENABLE_HIDE_OFFSET = 112
+HCNETSDK_PIC_CFG_SHOW_OSD_OFFSET = 148
+HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET = 152
+HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET = 156
+HCNETSDK_EZVIZ_ACCESS_CFG_SIZE = 516
+HCNETSDK_EZVIZ_ACCESS_CFG_ENABLE_OFFSET = 4
+HCNETSDK_EZVIZ_ACCESS_CFG_DEVICE_STATUS_OFFSET = 5
+HCNETSDK_EZVIZ_ACCESS_CFG_ALLOW_REDIRECT_OFFSET = 6
+HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_OFFSET = 7
+HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_SIZE = 64
+HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_OFFSET = 72
+HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_SIZE = 32
+HCNETSDK_EZVIZ_ACCESS_CFG_NET_MODE_OFFSET = 104
 
 
 class HcNetSdkAbility(IntEnum):
@@ -1033,10 +1188,243 @@ class EzvizLanWifiApInfo:
 
 
 @dataclass(frozen=True)
+class EzvizLanHdDiskConfig:
+    """One ``NET_DVR_SINGLE_HD`` entry from a traced storage config."""
+
+    hd_no: int
+    capacity: int
+    free_space: int
+    status: int
+    attribute: int
+    hd_type: int
+    disk_driver: int
+    group: int
+    recycling: int
+    storage_type: int
+    picture_capacity: int
+    free_picture_space: int
+
+
+@dataclass(frozen=True)
 class EzvizLanHdConfig:
-    """Envelope for a traced ``NET_DVR_HDCFG`` response."""
+    """Known fields from a traced ``NET_DVR_HDCFG`` response."""
 
     declared_size: int
+    raw: bytes
+    disk_count: int = 0
+    disks: tuple[EzvizLanHdDiskConfig, ...] = ()
+
+
+@dataclass(frozen=True)
+class EzvizLanNtpConfig:
+    """Known fields from a traced ``NET_DVR_NTPPARA`` response."""
+
+    ntp_server: str
+    interval_minutes: int
+    enabled: int
+    time_difference_hours: int
+    time_difference_minutes: int
+    ntp_port: int
+    raw: bytes
+
+
+@dataclass(frozen=True)
+class EzvizLanNetInterfaceConfig:
+    """One Ethernet interface entry from ``NET_DVR_NETCFG_V30``."""
+
+    ip_address: str
+    subnet_mask: str
+    net_interface: int
+    port: int
+    mtu: int
+    mac_address: str
+
+
+@dataclass(frozen=True)
+class EzvizLanNetConfigV30:
+    """Known non-secret fields from a traced ``NET_DVR_NETCFG_V30`` response."""
+
+    declared_size: int
+    ethernet: tuple[EzvizLanNetInterfaceConfig, ...]
+    manage_host_ip: str
+    manage_host_port: int
+    ip_server_ip: str
+    multicast_ip: str
+    gateway_ip: str
+    nfs_ip: str
+    raw: bytes
+
+
+@dataclass(frozen=True)
+class EzvizLanDvrConfigSummary:
+    """Non-secret summary for sensitive traced ``NET_DVR_GetDVRConfig`` buffers."""
+
+    command: int
+    structure: str
+    declared_size: int
+    effective_size: int
+    raw_length: int
+    trailing_bytes: int
+    nonzero_bytes: int
+
+
+@dataclass(frozen=True)
+class EzvizLanEzvizAccessConfig:
+    """Redacted fields from ``NET_DVR_EZVIZ_ACCESS_CFG``.
+
+    The native structure also contains a verification-code byte array. This
+    model intentionally exposes only whether that field is populated.
+    """
+
+    declared_size: int
+    enabled: int
+    device_status: int
+    allow_redirect: int
+    domain_name: str
+    verification_code_present: bool
+    net_mode: int
+    raw_length: int
+    trailing_bytes: int
+
+
+@dataclass(frozen=True)
+class EzvizLanUserConfigV30Entry:
+    """One decoded ``NET_DVR_USER_INFO_V30`` entry.
+
+    Password and reserved bytes are hidden from ``repr(...)`` because this
+    structure can contain real device credentials.
+    """
+
+    index: int
+    username: str
+    password: str = field(repr=False)
+    password_bytes: bytes = field(repr=False)
+    local_rights: tuple[int, ...]
+    remote_rights: tuple[int, ...]
+    net_preview_rights: tuple[int, ...]
+    local_playback_rights: tuple[int, ...]
+    net_playback_rights: tuple[int, ...]
+    local_record_rights: tuple[int, ...]
+    net_record_rights: tuple[int, ...]
+    local_ptz_rights: tuple[int, ...]
+    net_ptz_rights: tuple[int, ...]
+    local_backup_rights: tuple[int, ...]
+    user_ipv4: str
+    user_ipv6: str
+    mac_address: str
+    priority: int
+    reserved: bytes = field(repr=False)
+
+    @property
+    def is_active(self) -> bool:
+        """Return whether the entry carries any configured user data."""
+        return bool(
+            self.username
+            or self.password_bytes
+            or self.priority
+            or self.user_ipv4
+            or self.user_ipv6
+            or self.mac_address
+            or any(self.local_rights)
+            or any(self.remote_rights)
+            or any(self.net_preview_rights)
+            or any(self.local_playback_rights)
+            or any(self.net_playback_rights)
+            or any(self.local_record_rights)
+            or any(self.net_record_rights)
+            or any(self.local_ptz_rights)
+            or any(self.net_ptz_rights)
+            or any(self.local_backup_rights)
+        )
+
+
+@dataclass(frozen=True)
+class EzvizLanUserConfigV30:
+    """Decoded ``NET_DVR_USER_V30`` user table."""
+
+    declared_size: int
+    users: tuple[EzvizLanUserConfigV30Entry, ...]
+    raw_length: int
+    trailing_bytes: int
+
+    @property
+    def active_users(self) -> tuple[EzvizLanUserConfigV30Entry, ...]:
+        """Return configured entries, leaving empty user slots out."""
+        return tuple(user for user in self.users if user.is_active)
+
+
+@dataclass(frozen=True)
+class EzvizLanDeviceConfigV40:
+    """Known fields from a traced ``NET_DVR_DEVICECFG_V40`` response."""
+
+    declared_size: int
+    device_name: str
+    dvr_id: int
+    recycle_record: int
+    serial_number: str
+    software_version: int
+    software_build_date: int
+    dsp_software_version: int
+    dsp_software_build_date: int
+    panel_version: int
+    hardware_version: int
+    alarm_in_port_count: int
+    alarm_out_port_count: int
+    rs232_count: int
+    rs485_count: int
+    network_port_count: int
+    disk_control_count: int
+    disk_count: int
+    dvr_type: int
+    channel_count: int
+    start_channel: int
+    audio_count: int
+    ip_channel_count: int
+    device_type: int
+    device_type_name: str
+    raw: bytes
+
+
+@dataclass(frozen=True)
+class EzvizLanRecordDayConfig:
+    """One all-day entry from ``NET_DVR_RECORD_V30``."""
+
+    day_index: int
+    all_day_record: int
+    record_type: int
+
+
+@dataclass(frozen=True)
+class EzvizLanRecordScheduleSegment:
+    """One timed schedule segment from ``NET_DVR_RECORD_V30``."""
+
+    day_index: int
+    segment_index: int
+    start_hour: int
+    start_minute: int
+    stop_hour: int
+    stop_minute: int
+    record_type: int
+
+
+@dataclass(frozen=True)
+class EzvizLanRecordConfigV30:
+    """Known fields from a traced ``NET_DVR_RECORD_V30`` response."""
+
+    declared_size: int
+    record_enabled: int
+    all_day: tuple[EzvizLanRecordDayConfig, ...]
+    schedule: tuple[tuple[EzvizLanRecordScheduleSegment, ...], ...]
+    record_time: int
+    pre_record_time: int
+    recorder_duration: int
+    redundancy_record: int
+    audio_record: int
+    stream_type: int
+    passback_record: int
+    lock_duration: int
+    record_backup: int
+    svc_level: int
     raw: bytes
 
 
@@ -1054,6 +1442,102 @@ class EzvizLanCameraParamConfig:
     light_inhibit_level: int
     gray_level: int
     raw: bytes
+
+    @property
+    def wdr_enabled(self) -> int | None:
+        """Return ``struWdr.byWDREnabled`` when the native buffer includes it."""
+        return _optional_raw_byte(self.raw, HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET)
+
+    @property
+    def wdr_level_1(self) -> int | None:
+        """Return ``struWdr.byWDRLevel1`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET + 1)
+
+    @property
+    def wdr_level_2(self) -> int | None:
+        """Return ``struWdr.byWDRLevel2`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET + 2)
+
+    @property
+    def wdr_contrast_level(self) -> int | None:
+        """Return ``struWdr.byWDRContrastLevel`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_CAMERA_PARAM_CFG_WDR_OFFSET + 3)
+
+    @property
+    def day_night_filter_type(self) -> int | None:
+        """Return ``struDayNight.byDayNightFilterType`` when present."""
+        return _optional_raw_byte(
+            self.raw, HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET
+        )
+
+    @property
+    def day_night_schedule_enabled(self) -> int | None:
+        """Return ``struDayNight.bySwitchScheduleEnabled`` when present."""
+        return _optional_raw_byte(
+            self.raw, HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET + 1
+        )
+
+    @property
+    def day_night_begin_time(self) -> tuple[int, int, int] | None:
+        """Return the day/night begin time tuple when present."""
+        return _optional_raw_byte_triplet(
+            self.raw,
+            HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET + 2,
+            HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET + 7,
+            HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET + 8,
+        )
+
+    @property
+    def day_night_end_time(self) -> tuple[int, int, int] | None:
+        """Return the day/night end time tuple when present."""
+        return _optional_raw_byte_triplet(
+            self.raw,
+            HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET + 3,
+            HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET + 9,
+            HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET + 10,
+        )
+
+    @property
+    def day_to_night_filter_level(self) -> int | None:
+        """Return ``struDayNight.byDayToNightFilterLevel`` when present."""
+        return _optional_raw_byte(
+            self.raw, HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET + 4
+        )
+
+    @property
+    def night_to_day_filter_level(self) -> int | None:
+        """Return ``struDayNight.byNightToDayFilterLevel`` when present."""
+        return _optional_raw_byte(
+            self.raw, HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET + 5
+        )
+
+    @property
+    def day_night_filter_time(self) -> int | None:
+        """Return ``struDayNight.byDayNightFilterTime`` when present."""
+        return _optional_raw_byte(
+            self.raw, HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET + 6
+        )
+
+    @property
+    def day_night_alarm_trigger_state(self) -> int | None:
+        """Return ``struDayNight.byAlarmTrigState`` when present."""
+        return _optional_raw_byte(
+            self.raw, HCNETSDK_CAMERA_PARAM_CFG_DAY_NIGHT_OFFSET + 11
+        )
+
+    @property
+    def backlight_mode(self) -> int | None:
+        """Return ``struBackLight.byBacklightMode`` when present."""
+        return _optional_raw_byte(
+            self.raw, HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET
+        )
+
+    @property
+    def backlight_level(self) -> int | None:
+        """Return ``struBackLight.byBacklightLevel`` when present."""
+        return _optional_raw_byte(
+            self.raw, HCNETSDK_CAMERA_PARAM_CFG_BACKLIGHT_OFFSET + 1
+        )
 
 
 @dataclass(frozen=True)
@@ -1086,6 +1570,33 @@ class EzvizLanAudioOutputVolume:
 
 
 @dataclass(frozen=True)
+class EzvizLanCompressionInfoV30:
+    """Known fields from one ``NET_DVR_COMPRESSION_INFO_V30`` block."""
+
+    stream_type: int
+    resolution: int
+    bitrate_type: int
+    picture_quality: int
+    video_bitrate: int
+    video_frame_rate: int
+    i_frame_interval: int
+    interval_bp_frame: int
+    reserved1: int
+    video_encoding_type: int
+    audio_encoding_type: int
+    video_encoding_complexity: int
+    svc_enabled: int
+    format_type: int
+    audio_bitrate: int
+    stream_smoothing: int
+    audio_sampling_rate: int
+    smart_codec: int
+    depth_map_enabled: int
+    average_video_bitrate: int
+    raw: bytes
+
+
+@dataclass(frozen=True)
 class EzvizLanCompressionConfig:
     """Known fields from a ``NET_DVR_COMPRESSIONCFG_V30`` response."""
 
@@ -1100,6 +1611,37 @@ class EzvizLanCompressionConfig:
     video_encoding_type: int
     raw: bytes
 
+    @property
+    def normal_record(self) -> EzvizLanCompressionInfoV30:
+        """Return ``struNormHighRecordPara`` when present."""
+        info = _hcnetsdk_compression_info_v30(
+            self.raw, HCNETSDK_COMPRESSION_CFG_NORMAL_OFFSET
+        )
+        if info is None:
+            raise PyEzvizError("EZVIZ LAN compression normal block is missing")
+        return info
+
+    @property
+    def reserved(self) -> EzvizLanCompressionInfoV30 | None:
+        """Return ``struRes`` when present."""
+        return _hcnetsdk_compression_info_v30(
+            self.raw, HCNETSDK_COMPRESSION_CFG_RESERVED_OFFSET
+        )
+
+    @property
+    def event_record(self) -> EzvizLanCompressionInfoV30 | None:
+        """Return ``struEventRecordPara`` when present."""
+        return _hcnetsdk_compression_info_v30(
+            self.raw, HCNETSDK_COMPRESSION_CFG_EVENT_OFFSET
+        )
+
+    @property
+    def network(self) -> EzvizLanCompressionInfoV30 | None:
+        """Return ``struNetPara`` when present."""
+        return _hcnetsdk_compression_info_v30(
+            self.raw, HCNETSDK_COMPRESSION_CFG_NETWORK_OFFSET
+        )
+
 
 @dataclass(frozen=True)
 class EzvizLanPictureConfig:
@@ -1108,6 +1650,106 @@ class EzvizLanPictureConfig:
     declared_size: int
     channel_name: str
     raw: bytes
+
+    @property
+    def video_format(self) -> int | None:
+        """Return ``dwVideoFormat`` when present."""
+        return _optional_raw_u32_be(self.raw, HCNETSDK_PIC_CFG_VIDEO_FORMAT_OFFSET)
+
+    @property
+    def brightness(self) -> int | None:
+        """Return ``byBrightness`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_PIC_CFG_BRIGHTNESS_OFFSET)
+
+    @property
+    def contrast(self) -> int | None:
+        """Return ``byContrast`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_PIC_CFG_BRIGHTNESS_OFFSET + 1)
+
+    @property
+    def saturation(self) -> int | None:
+        """Return ``bySaturation`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_PIC_CFG_BRIGHTNESS_OFFSET + 2)
+
+    @property
+    def hue(self) -> int | None:
+        """Return ``byHue`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_PIC_CFG_BRIGHTNESS_OFFSET + 3)
+
+    @property
+    def show_channel_name(self) -> int | None:
+        """Return ``dwShowChanName`` when present."""
+        return _optional_raw_u32_be(
+            self.raw, HCNETSDK_PIC_CFG_SHOW_CHANNEL_NAME_OFFSET
+        )
+
+    @property
+    def channel_name_position(self) -> tuple[int, int] | None:
+        """Return ``wShowNameTopLeftX`` and ``wShowNameTopLeftY`` when present."""
+        return _optional_raw_u16_be_pair(
+            self.raw,
+            HCNETSDK_PIC_CFG_NAME_POSITION_OFFSET,
+            HCNETSDK_PIC_CFG_NAME_POSITION_OFFSET + 2,
+        )
+
+    @property
+    def hide_enabled(self) -> int | None:
+        """Return ``dwEnableHide`` when present."""
+        return _optional_raw_u32_be(self.raw, HCNETSDK_PIC_CFG_ENABLE_HIDE_OFFSET)
+
+    @property
+    def show_osd(self) -> int | None:
+        """Return ``dwShowOsd`` when present."""
+        return _optional_raw_u32_be(self.raw, HCNETSDK_PIC_CFG_SHOW_OSD_OFFSET)
+
+    @property
+    def osd_position(self) -> tuple[int, int] | None:
+        """Return ``wOSDTopLeftX`` and ``wOSDTopLeftY`` when present."""
+        return _optional_raw_u16_be_pair(
+            self.raw,
+            HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET,
+            HCNETSDK_PIC_CFG_OSD_POSITION_OFFSET + 2,
+        )
+
+    @property
+    def osd_type(self) -> int | None:
+        """Return ``byOSDType`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET)
+
+    @property
+    def display_week(self) -> int | None:
+        """Return ``byDispWeek`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET + 1)
+
+    @property
+    def osd_attribute(self) -> int | None:
+        """Return ``byOSDAttrib`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET + 2)
+
+    @property
+    def hour_osd_type(self) -> int | None:
+        """Return ``byHourOSDType`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET + 3)
+
+    @property
+    def font_size(self) -> int | None:
+        """Return ``byFontSize`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET + 4)
+
+    @property
+    def osd_color_type(self) -> int | None:
+        """Return ``byOSDColorType`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET + 5)
+
+    @property
+    def alignment(self) -> int | None:
+        """Return ``byAlignment`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET + 6)
+
+    @property
+    def osd_millisecond_enabled(self) -> int | None:
+        """Return ``byOSDMilliSecondEnable`` when present."""
+        return _optional_raw_byte(self.raw, HCNETSDK_PIC_CFG_OSD_TYPE_OFFSET + 7)
 
 
 @dataclass(frozen=True)
@@ -1442,6 +2084,232 @@ class EzvizLanPtzAbility:
     def control_type_options(self) -> tuple[str, ...]:
         """Return comma-separated PTZ control options as a tuple."""
         return _ability_option_tuple(self.control_types)
+
+
+@dataclass(frozen=True)
+class EzvizLanAccessProtocolAbility:
+    """Parsed safe fields from ``AccessProtocolAbility`` XML."""
+
+    channel_no: str | None = None
+    enable_options: str | None = None
+    device_status_options: str | None = None
+    allow_redirect_options: str | None = None
+    domain_length_min: int = 0
+    domain_length_max: int = 0
+    has_ezviz_param: bool = False
+
+    @property
+    def success(self) -> bool:
+        """Return whether the EZVIZ parameter section was present."""
+        return self.has_ezviz_param
+
+    @property
+    def enable_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated enable options as a tuple."""
+        return _ability_option_tuple(self.enable_options)
+
+    @property
+    def device_status_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated device-status options as a tuple."""
+        return _ability_option_tuple(self.device_status_options)
+
+    @property
+    def allow_redirect_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated redirect options as a tuple."""
+        return _ability_option_tuple(self.allow_redirect_options)
+
+
+@dataclass(frozen=True)
+class EzvizLanVideoPicAbility:
+    """Parsed safe fields from ``VideoPicAbility`` XML."""
+
+    channel_no: str | None = None
+    channel_name_enabled: bool = False
+    week_enabled: bool = False
+    osd_type_options: str | None = None
+    osd_attribute_options: str | None = None
+    osd_hour_type_options: str | None = None
+    motion_region_type_options: str | None = None
+    motion_grid_row_granularity: int = 0
+    motion_grid_column_granularity: int = 0
+
+    @property
+    def osd_type_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated OSD type options as a tuple."""
+        return _ability_option_tuple(self.osd_type_options)
+
+    @property
+    def osd_attribute_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated OSD attribute options as a tuple."""
+        return _ability_option_tuple(self.osd_attribute_options)
+
+    @property
+    def osd_hour_type_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated OSD hour-type options as a tuple."""
+        return _ability_option_tuple(self.osd_hour_type_options)
+
+    @property
+    def motion_region_type_option_list(self) -> tuple[str, ...]:
+        """Return comma-separated motion region-type options as a tuple."""
+        return _ability_option_tuple(self.motion_region_type_options)
+
+
+@dataclass(frozen=True)
+class EzvizLanIpcFrontParameterRange:
+    """One integer range advertised by ``CAMERAPARA`` ability XML."""
+
+    minimum: int = 0
+    maximum: int = 0
+    default: int | None = None
+
+    @property
+    def supported(self) -> bool:
+        """Return whether the range has a non-empty max/min span."""
+        return self.maximum > self.minimum
+
+
+@dataclass(frozen=True)
+class EzvizLanIpcFrontParameterAbility:
+    """Parsed safe image/front-parameter ranges from ``CAMERAPARA`` XML."""
+
+    has_camera_para: bool = False
+    power_line_frequency_mode_range: str | None = None
+    white_balance_mode_range: str | None = None
+    exposure_mode_range: str | None = None
+    exposure_set_range: str | None = None
+    exposure_user_set: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    gain_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    brightness_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    contrast_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    sharpness_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    saturation_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    day_night_filter_type_range: str | None = None
+    switch_schedule_enabled_range: str | None = None
+    day_to_night_filter_level_range: str | None = None
+    night_to_day_filter_level_range: str | None = None
+    day_night_filter_time: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    backlight_mode_range: str | None = None
+    mirror_range: str | None = None
+    digital_noise_reduction_enable_range: str | None = None
+    digital_noise_reduction_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    digital_noise_spectral_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+    digital_noise_temporal_level: EzvizLanIpcFrontParameterRange = field(
+        default_factory=EzvizLanIpcFrontParameterRange
+    )
+
+    @property
+    def success(self) -> bool:
+        """Return whether a camera-parameter ability root was parsed."""
+        return self.has_camera_para
+
+    @property
+    def mirror_options(self) -> tuple[str, ...]:
+        """Return comma-separated mirror options as a tuple."""
+        return _ability_option_tuple(self.mirror_range)
+
+    @property
+    def backlight_mode_options(self) -> tuple[str, ...]:
+        """Return comma-separated backlight mode options as a tuple."""
+        return _ability_option_tuple(self.backlight_mode_range)
+
+    @property
+    def day_night_filter_type_options(self) -> tuple[str, ...]:
+        """Return comma-separated day/night filter type options as a tuple."""
+        return _ability_option_tuple(self.day_night_filter_type_range)
+
+
+@dataclass(frozen=True)
+class EzvizLanAudioVideoCompressStream:
+    """One video stream profile from ``AudioVideoCompressInfo`` XML."""
+
+    index: int | None = None
+    video_encode_type_range: str | None = None
+    video_encode_efficiency_range: str | None = None
+    interval_bp_frame_range: str | None = None
+    e_frame: int = 0
+    resolution_indexes: tuple[int, ...] = ()
+    frame_rates: tuple[int, ...] = ()
+    bitrate_min: int = 0
+    bitrate_max: int = 0
+
+    @property
+    def resolution_count(self) -> int:
+        """Return the number of advertised video resolutions."""
+        return len(self.resolution_indexes)
+
+
+@dataclass(frozen=True)
+class EzvizLanAudioVideoCompressVideoChannel:
+    """One video channel from ``AudioVideoCompressInfo`` XML."""
+
+    channel_number: int = 0
+    main_stream: EzvizLanAudioVideoCompressStream | None = None
+    sub_streams: tuple[EzvizLanAudioVideoCompressStream, ...] = ()
+
+    @property
+    def supports_sub_stream(self) -> bool:
+        """Return whether at least one sub-stream profile was advertised."""
+        return bool(self.sub_streams)
+
+
+@dataclass(frozen=True)
+class EzvizLanAudioVideoCompressAudioChannel:
+    """One audio channel from ``AudioVideoCompressInfo`` XML."""
+
+    channel_number: int = 0
+    main_audio_encode_type_range: str | None = None
+    sub_audio_encode_type_range: str | None = None
+    audio_in_type_range: str | None = None
+    audio_in_volume_min: int = 0
+    audio_in_volume_max: int = 0
+
+
+@dataclass(frozen=True)
+class EzvizLanAudioVideoCompressVoiceTalkChannel:
+    """One voice-talk channel from ``AudioVideoCompressInfo`` XML."""
+
+    channel_number: int = 0
+    voice_talk_encode_type_range: str | None = None
+    voice_talk_in_type_range: str | None = None
+
+
+@dataclass(frozen=True)
+class EzvizLanAudioVideoCompressInfo:
+    """Parsed safe fields from ``AudioVideoCompressInfo`` XML."""
+
+    video_channels: tuple[EzvizLanAudioVideoCompressVideoChannel, ...] = ()
+    audio_channels: tuple[EzvizLanAudioVideoCompressAudioChannel, ...] = ()
+    voice_talk_channels: tuple[EzvizLanAudioVideoCompressVoiceTalkChannel, ...] = ()
+    has_video_compress_info: bool = False
+    has_audio_compress_info: bool = False
+
+    @property
+    def success(self) -> bool:
+        """Return whether any advertised audio or video ability section was parsed."""
+        return self.has_video_compress_info or self.has_audio_compress_info
+
+    @property
+    def supports_sub_stream(self) -> bool:
+        """Return whether any video channel advertises sub-stream support."""
+        return any(channel.supports_sub_stream for channel in self.video_channels)
 
 
 @dataclass(frozen=True)
@@ -4733,6 +5601,64 @@ def ezviz_lan_wifi_ap_info_list_request(
     )
 
 
+def ezviz_lan_time_get_config_request(
+    login_id: int,
+) -> HcNetSdkDvrConfigRequest:
+    """Return the local ``NET_DVR_TIME`` read request shape."""
+    return hcnetsdk_dvr_config_get_request(
+        login_id,
+        HcNetSdkDvrCommand.GET_TIME_CFG,
+        structure="NET_DVR_TIME",
+    )
+
+
+def ezviz_lan_ntp_get_config_request(
+    login_id: int,
+) -> HcNetSdkDvrConfigRequest:
+    """Return the local ``NET_DVR_NTPPARA`` read request shape."""
+    return hcnetsdk_dvr_config_get_request(
+        login_id,
+        HcNetSdkDvrCommand.GET_NTP_CFG,
+        structure="NET_DVR_NTPPARA",
+    )
+
+
+def ezviz_lan_device_config_v40_request(
+    login_id: int,
+) -> HcNetSdkDvrConfigRequest:
+    """Return the local ``NET_DVR_DEVICECFG_V40`` read request shape."""
+    return hcnetsdk_dvr_config_get_request(
+        login_id,
+        HcNetSdkDvrCommand.GET_DEVICE_CFG_V40,
+        structure="NET_DVR_DEVICECFG_V40",
+    )
+
+
+def ezviz_lan_net_config_v30_request(
+    login_id: int,
+) -> HcNetSdkDvrConfigRequest:
+    """Return the local ``NET_DVR_NETCFG_V30`` read request shape."""
+    return hcnetsdk_dvr_config_get_request(
+        login_id,
+        HcNetSdkDvrCommand.GET_NET_CFG,
+        structure="NET_DVR_NETCFG_V30",
+    )
+
+
+def ezviz_lan_record_config_v30_request(
+    login_id: int,
+    *,
+    channel: int = 1,
+) -> HcNetSdkDvrConfigRequest:
+    """Return the local ``NET_DVR_RECORD_V30`` read request shape."""
+    return hcnetsdk_dvr_config_get_request(
+        login_id,
+        HcNetSdkDvrCommand.GET_RECORD_CFG_V30,
+        channel=channel,
+        structure="NET_DVR_RECORD_V30",
+    )
+
+
 def ezviz_lan_wifi_ap_info_list(
     data: bytes | bytearray | memoryview,
 ) -> tuple[EzvizLanWifiApInfo, ...]:
@@ -4740,11 +5666,10 @@ def ezviz_lan_wifi_ap_info_list(
     raw = bytes(data)
     if len(raw) < HCNETSDK_WIFI_AP_INFO_LIST_HEADER_SIZE:
         raise PyEzvizError("EZVIZ LAN Wi-Fi AP list response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "Wi-Fi AP list"
+    )
     count = int.from_bytes(raw[4:8], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN Wi-Fi AP list response is truncated")
-    effective_size = declared_size or len(raw)
     required_size = (
         HCNETSDK_WIFI_AP_INFO_LIST_HEADER_SIZE
         + count * HCNETSDK_WIFI_AP_INFO_ENTRY_SIZE
@@ -4799,21 +5724,596 @@ def ezviz_lan_wifi_ap_info_list(
     return tuple(entries)
 
 
+def ezviz_lan_time_config(data: bytes | bytearray | memoryview) -> HcNetSdkTime:
+    """Parse a traced ``NET_DVR_TIME`` buffer from command-port output."""
+    raw = bytes(data)
+    if len(raw) < HCNETSDK_TIME_CFG_SIZE:
+        raise PyEzvizError("EZVIZ LAN time config response is too short")
+    fields = tuple(
+        int.from_bytes(raw[offset : offset + 4], "big")
+        for offset in range(0, HCNETSDK_TIME_CFG_SIZE, 4)
+    )
+    parsed = HcNetSdkTime(*fields)
+    parsed.to_native_dict()
+    return parsed
+
+
+def ezviz_lan_ntp_config(data: bytes | bytearray | memoryview) -> EzvizLanNtpConfig:
+    """Parse known ``NET_DVR_NTPPARA`` fields from command-port output."""
+    raw = bytes(data)
+    if len(raw) < HCNETSDK_NTP_CFG_SIZE:
+        raise PyEzvizError("EZVIZ LAN NTP config response is too short")
+    raw = raw[:HCNETSDK_NTP_CFG_SIZE]
+    return EzvizLanNtpConfig(
+        ntp_server=_nul_stripped_text(raw[:HCNETSDK_NTP_SERVER_SIZE]),
+        interval_minutes=int.from_bytes(
+            raw[
+                HCNETSDK_NTP_INTERVAL_OFFSET
+                : HCNETSDK_NTP_INTERVAL_OFFSET + 2
+            ],
+            "big",
+        ),
+        enabled=raw[HCNETSDK_NTP_ENABLE_OFFSET],
+        time_difference_hours=int.from_bytes(
+            raw[
+                HCNETSDK_NTP_TIME_DIFFERENCE_HOURS_OFFSET
+                : HCNETSDK_NTP_TIME_DIFFERENCE_HOURS_OFFSET + 1
+            ],
+            "little",
+            signed=True,
+        ),
+        time_difference_minutes=int.from_bytes(
+            raw[
+                HCNETSDK_NTP_TIME_DIFFERENCE_MINUTES_OFFSET
+                : HCNETSDK_NTP_TIME_DIFFERENCE_MINUTES_OFFSET + 1
+            ],
+            "little",
+            signed=True,
+        ),
+        ntp_port=int.from_bytes(
+            raw[HCNETSDK_NTP_PORT_OFFSET : HCNETSDK_NTP_PORT_OFFSET + 2],
+            "big",
+        ),
+        raw=raw,
+    )
+
+
+def ezviz_lan_net_config_v30(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanNetConfigV30:
+    """Parse non-secret ``NET_DVR_NETCFG_V30`` fields from command-port output."""
+    raw = bytes(data)
+    if len(raw) < 4:
+        raise PyEzvizError("EZVIZ LAN net config response is too short")
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "net config"
+    )
+    raw = raw[:effective_size]
+    if len(raw) < HCNETSDK_NETCFG_V30_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN net config declared size is too small")
+
+    ethernet: list[EzvizLanNetInterfaceConfig] = []
+    offset = HCNETSDK_NETCFG_V30_ETHERNET_OFFSET
+    for _ in range(HCNETSDK_NETCFG_V30_ETHERNET_COUNT):
+        entry = raw[offset : offset + HCNETSDK_NETCFG_V30_ETHERNET_SIZE]
+        ethernet.append(
+            EzvizLanNetInterfaceConfig(
+                ip_address=_fixed_ipv4_text(
+                    entry[:HCNETSDK_NETCFG_V30_IP_SIZE]
+                ),
+                subnet_mask=_fixed_ipv4_text(
+                    entry[
+                        HCNETSDK_NETCFG_V30_IP_SIZE
+                        : HCNETSDK_NETCFG_V30_IP_SIZE * 2
+                    ]
+                ),
+                net_interface=int.from_bytes(
+                    entry[
+                        HCNETSDK_NETCFG_V30_ETHERNET_NET_INTERFACE_OFFSET
+                        : HCNETSDK_NETCFG_V30_ETHERNET_NET_INTERFACE_OFFSET + 4
+                    ],
+                    "big",
+                ),
+                port=int.from_bytes(
+                    entry[
+                        HCNETSDK_NETCFG_V30_ETHERNET_PORT_OFFSET
+                        : HCNETSDK_NETCFG_V30_ETHERNET_PORT_OFFSET + 2
+                    ],
+                    "big",
+                ),
+                mtu=int.from_bytes(
+                    entry[
+                        HCNETSDK_NETCFG_V30_ETHERNET_MTU_OFFSET
+                        : HCNETSDK_NETCFG_V30_ETHERNET_MTU_OFFSET + 2
+                    ],
+                    "big",
+                ),
+                mac_address=_mac_address_text(
+                    entry[
+                        HCNETSDK_NETCFG_V30_ETHERNET_MAC_OFFSET
+                        : HCNETSDK_NETCFG_V30_ETHERNET_MAC_OFFSET + 6
+                    ]
+                ),
+            )
+        )
+        offset += HCNETSDK_NETCFG_V30_ETHERNET_SIZE
+
+    return EzvizLanNetConfigV30(
+        declared_size=effective_size,
+        ethernet=tuple(ethernet),
+        manage_host_ip=_fixed_ipv4_text(
+            raw[
+                HCNETSDK_NETCFG_V30_MANAGE_HOST_IP_OFFSET
+                : HCNETSDK_NETCFG_V30_MANAGE_HOST_IP_OFFSET
+                + HCNETSDK_NETCFG_V30_IP_SIZE
+            ]
+        ),
+        manage_host_port=int.from_bytes(
+            raw[
+                HCNETSDK_NETCFG_V30_MANAGE_HOST_PORT_OFFSET
+                : HCNETSDK_NETCFG_V30_MANAGE_HOST_PORT_OFFSET + 2
+            ],
+            "big",
+        ),
+        ip_server_ip=_fixed_ipv4_text(
+            raw[
+                HCNETSDK_NETCFG_V30_IP_SERVER_OFFSET
+                : HCNETSDK_NETCFG_V30_IP_SERVER_OFFSET
+                + HCNETSDK_NETCFG_V30_IP_SIZE
+            ]
+        ),
+        multicast_ip=_fixed_ipv4_text(
+            raw[
+                HCNETSDK_NETCFG_V30_MULTICAST_IP_OFFSET
+                : HCNETSDK_NETCFG_V30_MULTICAST_IP_OFFSET
+                + HCNETSDK_NETCFG_V30_IP_SIZE
+            ]
+        ),
+        gateway_ip=_fixed_ipv4_text(
+            raw[
+                HCNETSDK_NETCFG_V30_GATEWAY_IP_OFFSET
+                : HCNETSDK_NETCFG_V30_GATEWAY_IP_OFFSET
+                + HCNETSDK_NETCFG_V30_IP_SIZE
+            ]
+        ),
+        nfs_ip=_fixed_ipv4_text(
+            raw[
+                HCNETSDK_NETCFG_V30_NFS_IP_OFFSET
+                : HCNETSDK_NETCFG_V30_NFS_IP_OFFSET
+                + HCNETSDK_NETCFG_V30_IP_SIZE
+            ]
+        ),
+        raw=raw,
+    )
+
+
+def _hcnetsdk_config_declared_size(raw: bytes, label: str) -> tuple[int, int]:
+    """Return declared/effective size for traced DVR config body variants."""
+    declared_size = int.from_bytes(raw[0:4], "big")
+    if declared_size == 0:
+        return declared_size, len(raw)
+    if declared_size <= len(raw):
+        return declared_size, declared_size
+
+    shifted_size = int.from_bytes(raw[0:2], "big")
+    if raw[2:4] == HCNETSDK_SHIFTED_SIZE_ZERO_SUFFIX and 0 < shifted_size <= len(
+        raw
+    ):
+        return shifted_size, shifted_size
+
+    raise PyEzvizError(f"EZVIZ LAN {label} response is truncated")
+
+
+def ezviz_lan_dvr_config_summary(
+    data: bytes | bytearray | memoryview,
+    *,
+    command: int,
+    structure: str,
+) -> EzvizLanDvrConfigSummary:
+    """Return a non-secret summary for a binary DVR config response."""
+    raw = bytes(data)
+    if len(raw) < 4:
+        raise PyEzvizError("EZVIZ LAN DVR config response is too short")
+    declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "DVR config"
+    )
+    if effective_size < 4:
+        raise PyEzvizError("EZVIZ LAN DVR config declared size is too small")
+    effective_raw = raw[:effective_size]
+    return EzvizLanDvrConfigSummary(
+        command=int(command),
+        structure=structure,
+        declared_size=declared_size,
+        effective_size=effective_size,
+        raw_length=len(raw),
+        trailing_bytes=len(raw) - effective_size,
+        nonzero_bytes=sum(1 for value in effective_raw if value),
+    )
+
+
+def ezviz_lan_wifi_config_summary(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanDvrConfigSummary:
+    """Return a non-secret summary of a traced ``NET_DVR_WIFI_CFG`` buffer."""
+    return ezviz_lan_dvr_config_summary(
+        data,
+        command=HcNetSdkDvrCommand.GET_WIFI_CFG,
+        structure="NET_DVR_WIFI_CFG",
+    )
+
+
+def ezviz_lan_ezviz_access_config_summary(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanDvrConfigSummary:
+    """Return a non-secret summary of a traced ``NET_DVR_EZVIZ_ACCESS_CFG``."""
+    return ezviz_lan_dvr_config_summary(
+        data,
+        command=HcNetSdkDvrCommand.GET_EZVIZ_ACCESS_CFG,
+        structure="NET_DVR_EZVIZ_ACCESS_CFG",
+    )
+
+
+def ezviz_lan_ezviz_access_config(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanEzvizAccessConfig:
+    """Parse redacted ``NET_DVR_EZVIZ_ACCESS_CFG`` fields from command output."""
+    raw = bytes(data)
+    if len(raw) < 4:
+        raise PyEzvizError("EZVIZ LAN access config response is too short")
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "EZVIZ access config"
+    )
+    if effective_size < HCNETSDK_EZVIZ_ACCESS_CFG_SIZE:
+        raise PyEzvizError("EZVIZ LAN access config declared size is too small")
+    effective_raw = raw[:effective_size]
+    verification = effective_raw[
+        HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_OFFSET
+        : HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_OFFSET
+        + HCNETSDK_EZVIZ_ACCESS_CFG_VERIFICATION_SIZE
+    ]
+    return EzvizLanEzvizAccessConfig(
+        declared_size=effective_size,
+        enabled=effective_raw[HCNETSDK_EZVIZ_ACCESS_CFG_ENABLE_OFFSET],
+        device_status=effective_raw[
+            HCNETSDK_EZVIZ_ACCESS_CFG_DEVICE_STATUS_OFFSET
+        ],
+        allow_redirect=effective_raw[
+            HCNETSDK_EZVIZ_ACCESS_CFG_ALLOW_REDIRECT_OFFSET
+        ],
+        domain_name=_nul_stripped_text(
+            effective_raw[
+                HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_OFFSET
+                : HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_OFFSET
+                + HCNETSDK_EZVIZ_ACCESS_CFG_DOMAIN_SIZE
+            ]
+        ),
+        verification_code_present=any(verification),
+        net_mode=effective_raw[HCNETSDK_EZVIZ_ACCESS_CFG_NET_MODE_OFFSET],
+        raw_length=len(raw),
+        trailing_bytes=len(raw) - effective_size,
+    )
+
+
+def ezviz_lan_user_config_v30_summary(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanDvrConfigSummary:
+    """Return a non-secret summary of ``NET_DVR_USER_V30`` config output."""
+    return ezviz_lan_dvr_config_summary(
+        data,
+        command=HcNetSdkDvrCommand.GET_USER_CFG_V30,
+        structure="NET_DVR_USER_V30",
+    )
+
+
+def ezviz_lan_user_config_v30(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanUserConfigV30:
+    """Decode a ``NET_DVR_USER_V30`` command-port response.
+
+    The returned object contains usernames, passwords, and rights. Keep live
+    outputs local and use synthetic fixtures in public tests/docs.
+    """
+    raw = bytes(data)
+    if len(raw) < 4:
+        raise PyEzvizError("EZVIZ LAN user config response is too short")
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "user config"
+    )
+    if effective_size < HCNETSDK_USER_CFG_V30_MIN_SIZE:
+        raise PyEzvizError("EZVIZ LAN user config declared size is too small")
+    if effective_size > HCNETSDK_USER_CFG_V30_MAX_SIZE:
+        raise PyEzvizError("EZVIZ LAN user config declared size is too large")
+    payload_size = effective_size - 4
+    if payload_size % HCNETSDK_USER_CFG_V30_ENTRY_SIZE:
+        raise PyEzvizError("EZVIZ LAN user config entry table is misaligned")
+
+    users = tuple(
+        _ezviz_lan_user_config_v30_entry(
+            raw[
+                4 + index * HCNETSDK_USER_CFG_V30_ENTRY_SIZE
+                : 4 + (index + 1) * HCNETSDK_USER_CFG_V30_ENTRY_SIZE
+            ],
+            index,
+        )
+        for index in range(payload_size // HCNETSDK_USER_CFG_V30_ENTRY_SIZE)
+    )
+    return EzvizLanUserConfigV30(
+        declared_size=effective_size,
+        users=users,
+        raw_length=len(raw),
+        trailing_bytes=len(raw) - effective_size,
+    )
+
+
+def _ezviz_lan_user_config_v30_entry(
+    entry: bytes,
+    index: int,
+) -> EzvizLanUserConfigV30Entry:
+    """Parse one fixed-size ``NET_DVR_USER_INFO_V30`` record."""
+    offset = 0
+
+    def take(size: int) -> bytes:
+        nonlocal offset
+        value = entry[offset : offset + size]
+        offset += size
+        return value
+
+    username = _nul_stripped_text(take(HCNETSDK_USER_CFG_V30_USERNAME_SIZE))
+    password_bytes = _fixed_secret_bytes(
+        take(HCNETSDK_USER_CFG_V30_PASSWORD_SIZE)
+    )
+    password = _fixed_secret_text(password_bytes)
+    local_rights = _byte_tuple(take(HCNETSDK_USER_CFG_V30_LOCAL_RIGHT_SIZE))
+    remote_rights = _byte_tuple(take(HCNETSDK_USER_CFG_V30_REMOTE_RIGHT_SIZE))
+    net_preview_rights = _byte_tuple(
+        take(HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE)
+    )
+    local_playback_rights = _byte_tuple(
+        take(HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE)
+    )
+    net_playback_rights = _byte_tuple(
+        take(HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE)
+    )
+    local_record_rights = _byte_tuple(
+        take(HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE)
+    )
+    net_record_rights = _byte_tuple(
+        take(HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE)
+    )
+    local_ptz_rights = _byte_tuple(
+        take(HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE)
+    )
+    net_ptz_rights = _byte_tuple(take(HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE))
+    local_backup_rights = _byte_tuple(
+        take(HCNETSDK_USER_CFG_V30_CHANNEL_RIGHT_SIZE)
+    )
+    user_ipv4 = _fixed_ipv4_text(take(HCNETSDK_USER_CFG_V30_USER_IP_V4_SIZE))
+    user_ipv6 = _fixed_ipv4_text(take(HCNETSDK_USER_CFG_V30_USER_IP_V6_SIZE))
+    mac_address = _mac_address_text(take(HCNETSDK_USER_CFG_V30_MAC_SIZE))
+    priority = take(1)[0]
+    reserved = take(HCNETSDK_USER_CFG_V30_RESERVED_SIZE)
+
+    return EzvizLanUserConfigV30Entry(
+        index=index,
+        username=username,
+        password=password,
+        password_bytes=password_bytes,
+        local_rights=local_rights,
+        remote_rights=remote_rights,
+        net_preview_rights=net_preview_rights,
+        local_playback_rights=local_playback_rights,
+        net_playback_rights=net_playback_rights,
+        local_record_rights=local_record_rights,
+        net_record_rights=net_record_rights,
+        local_ptz_rights=local_ptz_rights,
+        net_ptz_rights=net_ptz_rights,
+        local_backup_rights=local_backup_rights,
+        user_ipv4=user_ipv4,
+        user_ipv6=user_ipv6,
+        mac_address=mac_address,
+        priority=priority,
+        reserved=reserved,
+    )
+
+
+def ezviz_lan_device_config_v40(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanDeviceConfigV40:
+    """Parse known ``NET_DVR_DEVICECFG_V40`` fields from command-port output."""
+    raw = bytes(data)
+    if len(raw) < 4:
+        raise PyEzvizError("EZVIZ LAN device V40 config response is too short")
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "device V40 config"
+    )
+    raw = raw[:effective_size]
+    if len(raw) < HCNETSDK_DEVICE_CFG_V40_MIN_SIZE:
+        raise PyEzvizError(
+            "EZVIZ LAN device V40 config declared size is too small"
+        )
+
+    def u32(offset: int) -> int:
+        return int.from_bytes(raw[offset : offset + 4], "big")
+
+    return EzvizLanDeviceConfigV40(
+        declared_size=effective_size,
+        device_name=_nul_stripped_text(
+            raw[
+                HCNETSDK_DEVICE_CFG_V40_NAME_OFFSET
+                : HCNETSDK_DEVICE_CFG_V40_NAME_OFFSET
+                + HCNETSDK_DEVICE_CFG_V40_NAME_SIZE
+            ]
+        ),
+        dvr_id=u32(36),
+        recycle_record=u32(40),
+        serial_number=_nul_stripped_text(
+            raw[
+                HCNETSDK_DEVICE_CFG_V40_SERIAL_OFFSET
+                : HCNETSDK_DEVICE_CFG_V40_SERIAL_OFFSET
+                + HCNETSDK_DEVICE_CFG_V40_SERIAL_SIZE
+            ]
+        ),
+        software_version=u32(92),
+        software_build_date=u32(96),
+        dsp_software_version=u32(100),
+        dsp_software_build_date=u32(104),
+        panel_version=u32(108),
+        hardware_version=u32(112),
+        alarm_in_port_count=raw[116],
+        alarm_out_port_count=raw[117],
+        rs232_count=raw[118],
+        rs485_count=raw[119],
+        network_port_count=raw[120],
+        disk_control_count=raw[121],
+        disk_count=raw[122],
+        dvr_type=raw[123],
+        channel_count=raw[124],
+        start_channel=raw[125],
+        audio_count=raw[130],
+        ip_channel_count=raw[131],
+        device_type=int.from_bytes(raw[138:140], "big"),
+        device_type_name=_nul_stripped_text(
+            raw[
+                HCNETSDK_DEVICE_CFG_V40_TYPE_NAME_OFFSET
+                : HCNETSDK_DEVICE_CFG_V40_TYPE_NAME_OFFSET
+                + HCNETSDK_DEVICE_CFG_V40_TYPE_NAME_SIZE
+            ]
+        ),
+        raw=raw,
+    )
+
+
+def ezviz_lan_record_config_v30(
+    data: bytes | bytearray | memoryview,
+) -> EzvizLanRecordConfigV30:
+    """Parse known ``NET_DVR_RECORD_V30`` fields from command-port output."""
+    raw = bytes(data)
+    if len(raw) < 4:
+        raise PyEzvizError("EZVIZ LAN record config response is too short")
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "record config"
+    )
+    raw = raw[:effective_size]
+    if len(raw) < HCNETSDK_RECORD_CFG_V30_SIZE:
+        raise PyEzvizError("EZVIZ LAN record config declared size is too small")
+
+    all_day: list[EzvizLanRecordDayConfig] = []
+    offset = HCNETSDK_RECORD_CFG_V30_ALL_DAY_OFFSET
+    for day_index in range(HCNETSDK_RECORD_CFG_V30_DAY_COUNT):
+        entry = raw[offset : offset + HCNETSDK_RECORD_CFG_V30_ALL_DAY_SIZE]
+        all_day.append(
+            EzvizLanRecordDayConfig(
+                day_index=day_index,
+                all_day_record=int.from_bytes(entry[0:2], "big"),
+                record_type=entry[2],
+            )
+        )
+        offset += HCNETSDK_RECORD_CFG_V30_ALL_DAY_SIZE
+
+    schedule: list[tuple[EzvizLanRecordScheduleSegment, ...]] = []
+    offset = HCNETSDK_RECORD_CFG_V30_SCHEDULE_OFFSET
+    for day_index in range(HCNETSDK_RECORD_CFG_V30_DAY_COUNT):
+        day_segments: list[EzvizLanRecordScheduleSegment] = []
+        for segment_index in range(HCNETSDK_RECORD_CFG_V30_SEGMENTS_PER_DAY):
+            entry = raw[offset : offset + HCNETSDK_RECORD_CFG_V30_SCHEDULE_SIZE]
+            day_segments.append(
+                EzvizLanRecordScheduleSegment(
+                    day_index=day_index,
+                    segment_index=segment_index,
+                    start_hour=entry[0],
+                    start_minute=entry[1],
+                    stop_hour=entry[2],
+                    stop_minute=entry[3],
+                    record_type=entry[4],
+                )
+            )
+            offset += HCNETSDK_RECORD_CFG_V30_SCHEDULE_SIZE
+        schedule.append(tuple(day_segments))
+
+    trailer = HCNETSDK_RECORD_CFG_V30_TRAILER_OFFSET
+    return EzvizLanRecordConfigV30(
+        declared_size=effective_size,
+        record_enabled=int.from_bytes(raw[4:8], "big"),
+        all_day=tuple(all_day),
+        schedule=tuple(schedule),
+        record_time=int.from_bytes(raw[trailer : trailer + 4], "big"),
+        pre_record_time=int.from_bytes(raw[trailer + 4 : trailer + 8], "big"),
+        recorder_duration=int.from_bytes(raw[trailer + 8 : trailer + 12], "big"),
+        redundancy_record=raw[trailer + 12],
+        audio_record=raw[trailer + 13],
+        stream_type=raw[trailer + 14],
+        passback_record=raw[trailer + 15],
+        lock_duration=int.from_bytes(raw[trailer + 16 : trailer + 18], "big"),
+        record_backup=raw[trailer + 18],
+        svc_level=raw[trailer + 19],
+        raw=raw,
+    )
+
+
 def ezviz_lan_hd_config(
     data: bytes | bytearray | memoryview,
 ) -> EzvizLanHdConfig:
-    """Parse the native-sized ``NET_DVR_HDCFG`` command-port envelope."""
+    """Parse known ``NET_DVR_HDCFG`` fields from command-port output."""
     raw = bytes(data)
     if len(raw) < HCNETSDK_HD_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN HD config response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN HD config response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "HD config"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_HD_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN HD config declared size is too small")
-    return EzvizLanHdConfig(declared_size=effective_size, raw=raw)
+    if len(raw) < HCNETSDK_HD_CFG_HEADER_SIZE:
+        return EzvizLanHdConfig(declared_size=effective_size, raw=raw)
+
+    disk_count = int.from_bytes(raw[4:8], "big")
+    if disk_count > HCNETSDK_HD_CFG_DISK_COUNT:
+        raise PyEzvizError("EZVIZ LAN HD config disk count exceeds response capacity")
+    required_size = (
+        HCNETSDK_HD_CFG_DISK_OFFSET + disk_count * HCNETSDK_HD_CFG_DISK_SIZE
+    )
+    if required_size > len(raw):
+        raise PyEzvizError("EZVIZ LAN HD config disk table is truncated")
+
+    disks = tuple(
+        _ezviz_lan_hd_disk_config(
+            raw[
+                HCNETSDK_HD_CFG_DISK_OFFSET
+                + index * HCNETSDK_HD_CFG_DISK_SIZE
+                : HCNETSDK_HD_CFG_DISK_OFFSET
+                + (index + 1) * HCNETSDK_HD_CFG_DISK_SIZE
+            ]
+        )
+        for index in range(disk_count)
+    )
+    return EzvizLanHdConfig(
+        declared_size=effective_size,
+        raw=raw,
+        disk_count=disk_count,
+        disks=disks,
+    )
+
+
+def _ezviz_lan_hd_disk_config(entry: bytes) -> EzvizLanHdDiskConfig:
+    """Parse one fixed-size ``NET_DVR_SINGLE_HD`` record."""
+
+    def u32(offset: int) -> int:
+        return int.from_bytes(entry[offset : offset + 4], "big")
+
+    return EzvizLanHdDiskConfig(
+        hd_no=u32(HCNETSDK_HD_CFG_DISK_HD_NO_OFFSET),
+        capacity=u32(HCNETSDK_HD_CFG_DISK_CAPACITY_OFFSET),
+        free_space=u32(HCNETSDK_HD_CFG_DISK_FREE_SPACE_OFFSET),
+        status=u32(HCNETSDK_HD_CFG_DISK_STATUS_OFFSET),
+        attribute=entry[HCNETSDK_HD_CFG_DISK_ATTR_OFFSET],
+        hd_type=entry[HCNETSDK_HD_CFG_DISK_TYPE_OFFSET],
+        disk_driver=entry[HCNETSDK_HD_CFG_DISK_DRIVER_OFFSET],
+        group=u32(HCNETSDK_HD_CFG_DISK_GROUP_OFFSET),
+        recycling=entry[HCNETSDK_HD_CFG_DISK_RECYCLING_OFFSET],
+        storage_type=u32(HCNETSDK_HD_CFG_DISK_STORAGE_TYPE_OFFSET),
+        picture_capacity=u32(HCNETSDK_HD_CFG_DISK_PICTURE_CAPACITY_OFFSET),
+        free_picture_space=u32(HCNETSDK_HD_CFG_DISK_FREE_PICTURE_SPACE_OFFSET),
+    )
 
 
 def ezviz_lan_camera_param_config(
@@ -4823,10 +6323,9 @@ def ezviz_lan_camera_param_config(
     raw = bytes(data)
     if len(raw) < HCNETSDK_CAMERA_PARAM_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN camera-param response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN camera-param response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "camera-param"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_CAMERA_PARAM_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN camera-param declared size is too small")
@@ -4852,10 +6351,9 @@ def ezviz_lan_wifi_connect_status(
     raw = bytes(data)
     if len(raw) < HCNETSDK_WIFI_CONNECT_STATUS_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN Wi-Fi status response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN Wi-Fi status response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "Wi-Fi status"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_WIFI_CONNECT_STATUS_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN Wi-Fi status declared size is too small")
@@ -4889,10 +6387,9 @@ def ezviz_lan_audio_output_volume(
     raw = bytes(data)
     if len(raw) < HCNETSDK_AUDIOOUT_VOLUME_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN audio-output response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN audio-output response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "audio-output"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_AUDIOOUT_VOLUME_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN audio-output declared size is too small")
@@ -4903,6 +6400,38 @@ def ezviz_lan_audio_output_volume(
     )
 
 
+def _hcnetsdk_compression_info_v30(
+    raw: bytes,
+    offset: int,
+) -> EzvizLanCompressionInfoV30 | None:
+    if len(raw) < offset + HCNETSDK_COMPRESSION_INFO_V30_SIZE:
+        return None
+    block = raw[offset : offset + HCNETSDK_COMPRESSION_INFO_V30_SIZE]
+    return EzvizLanCompressionInfoV30(
+        stream_type=block[0],
+        resolution=block[1],
+        bitrate_type=block[2],
+        picture_quality=block[3],
+        video_bitrate=int.from_bytes(block[4:8], "big"),
+        video_frame_rate=int.from_bytes(block[8:12], "big"),
+        i_frame_interval=int.from_bytes(block[12:14], "big"),
+        interval_bp_frame=block[14],
+        reserved1=block[15],
+        video_encoding_type=block[16],
+        audio_encoding_type=block[17],
+        video_encoding_complexity=block[18],
+        svc_enabled=block[19],
+        format_type=block[20],
+        audio_bitrate=block[21],
+        stream_smoothing=block[22],
+        audio_sampling_rate=block[23],
+        smart_codec=block[24],
+        depth_map_enabled=block[25],
+        average_video_bitrate=int.from_bytes(block[26:28], "big"),
+        raw=block,
+    )
+
+
 def ezviz_lan_compression_config(
     data: bytes | bytearray | memoryview,
 ) -> EzvizLanCompressionConfig:
@@ -4910,23 +6439,27 @@ def ezviz_lan_compression_config(
     raw = bytes(data)
     if len(raw) < HCNETSDK_COMPRESSION_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN compression response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN compression response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "compression"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_COMPRESSION_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN compression declared size is too small")
+    normal_record = _hcnetsdk_compression_info_v30(
+        raw, HCNETSDK_COMPRESSION_CFG_NORMAL_OFFSET
+    )
+    if normal_record is None:
+        raise PyEzvizError("EZVIZ LAN compression normal block is missing")
     return EzvizLanCompressionConfig(
         declared_size=effective_size,
-        stream_type=raw[4],
-        resolution=raw[5],
-        bitrate_type=raw[6],
-        picture_quality=raw[7],
-        video_bitrate=int.from_bytes(raw[8:12], "big"),
-        video_frame_rate=int.from_bytes(raw[12:16], "big"),
-        i_frame_interval=int.from_bytes(raw[16:18], "big"),
-        video_encoding_type=raw[20],
+        stream_type=normal_record.stream_type,
+        resolution=normal_record.resolution,
+        bitrate_type=normal_record.bitrate_type,
+        picture_quality=normal_record.picture_quality,
+        video_bitrate=normal_record.video_bitrate,
+        video_frame_rate=normal_record.video_frame_rate,
+        i_frame_interval=normal_record.i_frame_interval,
+        video_encoding_type=normal_record.video_encoding_type,
         raw=raw,
     )
 
@@ -4938,10 +6471,9 @@ def ezviz_lan_picture_config(
     raw = bytes(data)
     if len(raw) < HCNETSDK_PIC_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN picture response is too short")
-    declared_size = int.from_bytes(raw[0:4], "big")
-    if declared_size and declared_size > len(raw):
-        raise PyEzvizError("EZVIZ LAN picture response is truncated")
-    effective_size = declared_size or len(raw)
+    _declared_size, effective_size = _hcnetsdk_config_declared_size(
+        raw, "picture"
+    )
     raw = raw[:effective_size]
     if len(raw) < HCNETSDK_PIC_CFG_MIN_SIZE:
         raise PyEzvizError("EZVIZ LAN picture declared size is too small")
@@ -5130,6 +6662,19 @@ def ezviz_lan_pic_config_get_request(
         HcNetSdkDvrCommand.GET_PIC_CFG_V40,
         channel=channel,
         structure="NET_DVR_PICCFG_V40",
+    )
+
+
+def ezviz_lan_pic_config_v30_get_request(
+    login_id: int,
+    channel: int,
+) -> HcNetSdkDvrConfigRequest:
+    """Return the traced legacy ``NET_DVR_PICCFG_V30`` read request shape."""
+    return hcnetsdk_dvr_config_get_request(
+        login_id,
+        HcNetSdkDvrCommand.GET_PIC_CFG_V30,
+        channel=channel,
+        structure="NET_DVR_PICCFG_V30",
     )
 
 
@@ -5538,7 +7083,11 @@ def ezviz_lan_ptz_ability_input(channel: int) -> bytes:
 
 
 def ezviz_lan_image_display_param_ability_input(channel: int) -> bytes:
-    """Return the image-display ability XML used by the RN LAN wrapper."""
+    """Return the image-display ability XML used by the RN LAN wrapper.
+
+    Live devices may acknowledge this request with an empty body. The image
+    parameter ranges used by the app are available through ``IPC_FRONT_PARAMETER``.
+    """
     return hcnetsdk_device_ability_xml("ImageDisplayParamAbility", channel=channel)
 
 
@@ -5586,7 +7135,11 @@ def ezviz_lan_image_display_param_ability_request(
     login_id: int,
     channel: int,
 ) -> HcNetSdkDeviceAbilityRequest:
-    """Return the RN LAN image-display ability request shape."""
+    """Return the RN LAN image-display ability request shape.
+
+    Prefer ``ezviz_lan_ipc_front_parameter_ability_request`` for a live
+    ``CAMERAPARA`` response containing image parameter ranges.
+    """
     return ezviz_lan_rn_device_ability_request(
         login_id,
         HcNetSdkAbility.DEVICE_ABILITY_INFO,
@@ -5677,6 +7230,180 @@ def ezviz_lan_ptz_ability(response: str | bytes) -> EzvizLanPtzAbility:
         or _xml_opt_attr(root, "actionType", parent="ScheduleTask"),
         privacy_mask_enable=_xml_bool_opt_attr(root, "globalEnable"),
         mirror_range=_xml_child_text(root, ("Mirror", "Range")),
+    )
+
+
+def ezviz_lan_access_protocol_ability(
+    response: str | bytes,
+) -> EzvizLanAccessProtocolAbility:
+    """Parse safe local-add fields from ``AccessProtocolAbility`` XML."""
+    try:
+        root = ET.fromstring(_device_ability_response_text(response))
+    except ET.ParseError as err:
+        raise PyEzvizError("Invalid EZVIZ LAN access-protocol ability XML") from err
+
+    return EzvizLanAccessProtocolAbility(
+        channel_no=_xml_descendant_text(root, "channelNO"),
+        enable_options=_xml_attr(root, "enable", "opt", parent="EzvizParam"),
+        device_status_options=_xml_attr(
+            root, "deviceStatus", "opt", parent="EzvizParam"
+        ),
+        allow_redirect_options=_xml_attr(
+            root, "allowRedirect", "opt", parent="EzvizParam"
+        ),
+        domain_length_min=_xml_attr_int(root, "domainLen", "min", parent="EzvizParam"),
+        domain_length_max=_xml_attr_int(root, "domainLen", "max", parent="EzvizParam"),
+        has_ezviz_param=_xml_has_descendant(root, "EzvizParam"),
+    )
+
+
+def ezviz_lan_video_pic_ability(response: str | bytes) -> EzvizLanVideoPicAbility:
+    """Parse safe OSD/motion fields from ``VideoPicAbility`` XML."""
+    try:
+        root = ET.fromstring(_device_ability_response_text(response))
+    except ET.ParseError as err:
+        raise PyEzvizError("Invalid EZVIZ LAN video-picture ability XML") from err
+
+    return EzvizLanVideoPicAbility(
+        channel_no=_xml_descendant_text(root, "channelNO"),
+        channel_name_enabled=_xml_descendant_bool_text(
+            root, "enabled", parent="ChannelName", default=False
+        ),
+        week_enabled=_xml_descendant_bool_text(root, "enabled", parent="Week"),
+        osd_type_options=_xml_attr(root, "OSDType", "opt", parent="OSD"),
+        osd_attribute_options=_xml_attr(root, "OSDAttrib", "opt", parent="OSD"),
+        osd_hour_type_options=_xml_attr(root, "OSDHourType", "opt", parent="OSD"),
+        motion_region_type_options=_xml_attr(
+            root, "regionType", "opt", parent="MotionDetection"
+        ),
+        motion_grid_row_granularity=_xml_descendant_int(
+            root, "rowGranularity", parent="VideoFormatP"
+        ),
+        motion_grid_column_granularity=_xml_descendant_int(
+            root, "columnGranularity", parent="VideoFormatP"
+        ),
+    )
+
+
+def ezviz_lan_ipc_front_parameter_ability(
+    response: str | bytes,
+) -> EzvizLanIpcFrontParameterAbility:
+    """Parse safe image/front-parameter ranges from ``CAMERAPARA`` XML."""
+    try:
+        root = ET.fromstring(_device_ability_response_text(response))
+    except ET.ParseError as err:
+        raise PyEzvizError("Invalid EZVIZ LAN IPC front-parameter XML") from err
+
+    field_root = _ipc_front_parameter_field_root(root)
+    return EzvizLanIpcFrontParameterAbility(
+        has_camera_para=_xml_local_name(root).lower() == "camerapara",
+        power_line_frequency_mode_range=_xml_child_text(
+            field_root, ("PowerLineFrequencyMode", "Range")
+        ),
+        white_balance_mode_range=_xml_child_text(
+            field_root, ("WhiteBalance", "WhiteBalanceMode", "Range")
+        ),
+        exposure_mode_range=_xml_child_text(
+            field_root, ("Exposure", "ExposureMode", "Range")
+        ),
+        exposure_set_range=_xml_child_text(
+            field_root, ("Exposure", "ExposureSet", "Range")
+        ),
+        exposure_user_set=_xml_child_int_range(
+            field_root, ("Exposure", "exposureUSERSET")
+        ),
+        gain_level=_xml_child_int_range(field_root, ("GainLevel",)),
+        brightness_level=_xml_child_int_range(field_root, ("BrightnessLevel",)),
+        contrast_level=_xml_child_int_range(field_root, ("ContrastLevel",)),
+        sharpness_level=_xml_child_int_range(field_root, ("SharpnessLevel",)),
+        saturation_level=_xml_child_int_range(field_root, ("SaturationLevel",)),
+        day_night_filter_type_range=_xml_child_text(
+            field_root, ("DayNightFilter", "DayNightFilterType", "Range")
+        ),
+        switch_schedule_enabled_range=_xml_child_text(
+            field_root,
+            (
+                "DayNightFilter",
+                "SwitchSchedule",
+                "SwitchScheduleEnabled",
+                "Range",
+            ),
+        ),
+        day_to_night_filter_level_range=_xml_child_text(
+            field_root,
+            (
+                "DayNightFilter",
+                "SwitchSchedule",
+                "DayToNightFilterLevel",
+                "Range",
+            ),
+        ),
+        night_to_day_filter_level_range=_xml_child_text(
+            field_root,
+            (
+                "DayNightFilter",
+                "SwitchSchedule",
+                "NightToDayFilterLevel",
+                "Range",
+            ),
+        ),
+        day_night_filter_time=_xml_child_int_range(
+            field_root, ("DayNightFilter", "SwitchSchedule", "DayNightFilterTime")
+        ),
+        backlight_mode_range=_xml_child_text(
+            field_root, ("Backlight", "BacklightMode", "Range")
+        ),
+        mirror_range=_xml_child_text(field_root, ("Mirror", "Range")),
+        digital_noise_reduction_enable_range=_xml_child_text(
+            field_root,
+            ("DigitalNoiseReduction", "DigitalNoiseReductionEnable", "Range"),
+        ),
+        digital_noise_reduction_level=_xml_child_int_range(
+            field_root, ("DigitalNoiseReduction", "DigitalNoiseReductionLevel")
+        ),
+        digital_noise_spectral_level=_xml_child_int_range(
+            field_root, ("DigitalNoiseReduction", "DigitalNoiseSpectralLevel")
+        ),
+        digital_noise_temporal_level=_xml_child_int_range(
+            field_root, ("DigitalNoiseReduction", "DigitalNoiseTemporalLevel")
+        ),
+    )
+
+
+def ezviz_lan_audio_video_compress_info(
+    response: str | bytes,
+) -> EzvizLanAudioVideoCompressInfo:
+    """Parse safe stream/audio fields from ``AudioVideoCompressInfo`` XML."""
+    try:
+        root = ET.fromstring(_device_ability_response_text(response))
+    except ET.ParseError as err:
+        raise PyEzvizError("Invalid EZVIZ LAN audio/video compress XML") from err
+
+    video_root = _xml_first_child(root, "VideoCompressInfo")
+    audio_root = _xml_first_child(root, "AudioCompressInfo")
+    video_channels = (
+        _audio_video_compress_video_channels(video_root)
+        if video_root is not None
+        else ()
+    )
+    audio_channels: tuple[EzvizLanAudioVideoCompressAudioChannel, ...] = ()
+    voice_talk_channels: tuple[EzvizLanAudioVideoCompressVoiceTalkChannel, ...] = ()
+    if audio_root is not None:
+        audio_section = _xml_first_child(audio_root, "Audio")
+        voice_talk_section = _xml_first_child(audio_root, "VoiceTalk")
+        if audio_section is not None:
+            audio_channels = _audio_video_compress_audio_channels(audio_section)
+        if voice_talk_section is not None:
+            voice_talk_channels = _audio_video_compress_voice_talk_channels(
+                voice_talk_section
+            )
+
+    return EzvizLanAudioVideoCompressInfo(
+        video_channels=video_channels,
+        audio_channels=audio_channels,
+        voice_talk_channels=voice_talk_channels,
+        has_video_compress_info=video_root is not None,
+        has_audio_compress_info=audio_root is not None,
     )
 
 
@@ -8357,6 +10084,60 @@ class HcNetSdkPurePythonClient:
             rsa_key=self.rsa_key,
         )
 
+    def access_protocol_ability(
+        self,
+        channel: int | str = "0xff",
+    ) -> EzvizLanAccessProtocolAbility:
+        """Read and parse local ``AccessProtocolAbility`` output."""
+        return ezviz_lan_access_protocol_ability(
+            self.device_ability(ezviz_lan_access_protocol_ability_request(1, channel))
+        )
+
+    def video_pic_ability(self, channel: int = 1) -> EzvizLanVideoPicAbility:
+        """Read and parse local ``VideoPicAbility`` output."""
+        return ezviz_lan_video_pic_ability(
+            self.device_ability(ezviz_lan_video_pic_ability_request(1, channel))
+        )
+
+    def audio_video_compress_info(
+        self,
+        channel: int = 1,
+    ) -> EzvizLanAudioVideoCompressInfo:
+        """Read and parse local ``AudioVideoCompressInfo`` output."""
+        return ezviz_lan_audio_video_compress_info(
+            self.device_ability(
+                ezviz_lan_audio_video_compress_info_ability_request(1, channel)
+            )
+        )
+
+    def ipc_front_parameter_ability(self) -> EzvizLanIpcFrontParameterAbility:
+        """Read and parse local ``IPC_FRONT_PARAMETER`` image ranges."""
+        return ezviz_lan_ipc_front_parameter_ability(
+            self.device_ability(ezviz_lan_ipc_front_parameter_ability_request(1))
+        )
+
+    def image_display_param_ability(self) -> EzvizLanIpcFrontParameterAbility:
+        """Read image-display ranges through the live-backed front-parameter path."""
+        return self.ipc_front_parameter_ability()
+
+    def soft_hardware_ability(self) -> EzvizLanDeviceSoftHardwareAbility:
+        """Read and parse local device software/hardware ability output."""
+        return ezviz_lan_soft_hardware_ability(
+            self.device_ability(ezviz_lan_soft_hardware_ability_request(1))
+        )
+
+    def playback_convert_ability(self) -> EzvizLanPlaybackConvertAbility:
+        """Read and parse local playback conversion ability output."""
+        return ezviz_lan_playback_convert_ability(
+            self.device_ability(ezviz_lan_record_ability_request(1))
+        )
+
+    def ptz_ability(self, channel: int = 1) -> EzvizLanPtzAbility:
+        """Read and parse local PTZ ability output."""
+        return ezviz_lan_ptz_ability(
+            self.device_ability(ezviz_lan_ptz_ability_request(1, channel))
+        )
+
     def dvr_config(
         self,
         request: HcNetSdkDvrConfigRequest,
@@ -8387,6 +10168,36 @@ class HcNetSdkPurePythonClient:
     def hd_config(self) -> EzvizLanHdConfig:
         """Read and parse traced ``NET_DVR_HDCFG`` output."""
         return ezviz_lan_hd_config(self.dvr_config(ezviz_lan_hd_config_request(1)))
+
+    def time_config(self) -> HcNetSdkTime:
+        """Read and parse traced ``NET_DVR_TIME`` output."""
+        return ezviz_lan_time_config(
+            self.dvr_config(ezviz_lan_time_get_config_request(1))
+        )
+
+    def ntp_config(self) -> EzvizLanNtpConfig:
+        """Read and parse traced ``NET_DVR_NTPPARA`` output."""
+        return ezviz_lan_ntp_config(
+            self.dvr_config(ezviz_lan_ntp_get_config_request(1))
+        )
+
+    def device_config_v40(self) -> EzvizLanDeviceConfigV40:
+        """Read and parse traced ``NET_DVR_DEVICECFG_V40`` output."""
+        return ezviz_lan_device_config_v40(
+            self.dvr_config(ezviz_lan_device_config_v40_request(1))
+        )
+
+    def net_config_v30(self) -> EzvizLanNetConfigV30:
+        """Read and parse traced ``NET_DVR_NETCFG_V30`` output."""
+        return ezviz_lan_net_config_v30(
+            self.dvr_config(ezviz_lan_net_config_v30_request(1))
+        )
+
+    def record_config_v30(self, channel: int = 1) -> EzvizLanRecordConfigV30:
+        """Read and parse traced ``NET_DVR_RECORD_V30`` output."""
+        return ezviz_lan_record_config_v30(
+            self.dvr_config(ezviz_lan_record_config_v30_request(1, channel=channel))
+        )
 
     def camera_param_config(self, channel: int = 1) -> EzvizLanCameraParamConfig:
         """Read and parse traced ``NET_DVR_CAMERAPARAMCFG`` output."""
@@ -8426,6 +10237,45 @@ class HcNetSdkPurePythonClient:
         """Read and parse traced ``NET_DVR_PICCFG_V40`` output."""
         return ezviz_lan_picture_config(
             self.dvr_config(ezviz_lan_pic_config_get_request(1, channel))
+        )
+
+    def picture_config_v30(self, channel: int = 1) -> EzvizLanPictureConfig:
+        """Read and parse traced legacy ``NET_DVR_PICCFG_V30`` output."""
+        return ezviz_lan_picture_config(
+            self.dvr_config(ezviz_lan_pic_config_v30_get_request(1, channel))
+        )
+
+    def wifi_config_summary(self) -> EzvizLanDvrConfigSummary:
+        """Read a traced ``NET_DVR_WIFI_CFG`` buffer as a non-secret summary."""
+        return ezviz_lan_wifi_config_summary(
+            self.dvr_config(ezviz_lan_wifi_get_config_request(1))
+        )
+
+    def ezviz_access_config_summary(self) -> EzvizLanDvrConfigSummary:
+        """Read traced EZVIZ access config as a non-secret summary."""
+        return ezviz_lan_ezviz_access_config_summary(
+            self.dvr_config(ezviz_lan_ezviz_access_get_config_request(1))
+        )
+
+    def ezviz_access_config(self) -> EzvizLanEzvizAccessConfig:
+        """Read and parse redacted traced ``NET_DVR_EZVIZ_ACCESS_CFG`` output."""
+        return ezviz_lan_ezviz_access_config(
+            self.dvr_config(ezviz_lan_ezviz_access_get_config_request(1))
+        )
+
+    def user_config_v30_summary(self) -> EzvizLanDvrConfigSummary:
+        """Read user config as a non-secret summary."""
+        return ezviz_lan_user_config_v30_summary(
+            self.dvr_config(ezviz_lan_user_password_get_config_request(1))
+        )
+
+    def user_config_v30(self) -> EzvizLanUserConfigV30:
+        """Read and decode ``NET_DVR_USER_V30`` user config.
+
+        The returned object can include usernames, passwords, and rights.
+        """
+        return ezviz_lan_user_config_v30(
+            self.dvr_config(ezviz_lan_user_password_get_config_request(1))
         )
 
     def stdxml_config(
@@ -8754,6 +10604,83 @@ def _sadp_string_bytes(
     return raw
 
 
+def _fixed_ipv4_text(value: bytes | bytearray | memoryview) -> str:
+    raw = bytes(value)
+    with suppress(UnicodeDecodeError):
+        text = _nul_stripped_text(raw)
+        if text and text.isprintable():
+            with suppress(ValueError):
+                return str(ipaddress.ip_address(text))
+            return text
+    binary_ipv4 = raw[:4]
+    if any(binary_ipv4) and not any(raw[4:]):
+        return str(ipaddress.ip_address(bytes(reversed(binary_ipv4))))
+    return ""
+
+
+def _mac_address_text(value: bytes | bytearray | memoryview) -> str:
+    raw = bytes(value)
+    if len(raw) != 6 or not any(raw):
+        return ""
+    return ":".join(f"{byte:02x}" for byte in raw)
+
+
+def _byte_tuple(value: bytes | bytearray | memoryview) -> tuple[int, ...]:
+    return tuple(bytes(value))
+
+
+def _optional_raw_byte(raw: bytes, offset: int) -> int | None:
+    return raw[offset] if len(raw) > offset else None
+
+
+def _optional_raw_u16_be(raw: bytes, offset: int) -> int | None:
+    if len(raw) < offset + 2:
+        return None
+    return int.from_bytes(raw[offset : offset + 2], "big")
+
+
+def _optional_raw_u32_be(raw: bytes, offset: int) -> int | None:
+    if len(raw) < offset + 4:
+        return None
+    return int.from_bytes(raw[offset : offset + 4], "big")
+
+
+def _optional_raw_u16_be_pair(
+    raw: bytes,
+    first_offset: int,
+    second_offset: int,
+) -> tuple[int, int] | None:
+    first = _optional_raw_u16_be(raw, first_offset)
+    second = _optional_raw_u16_be(raw, second_offset)
+    if first is None or second is None:
+        return None
+    return first, second
+
+
+def _optional_raw_byte_triplet(
+    raw: bytes,
+    first_offset: int,
+    second_offset: int,
+    third_offset: int,
+) -> tuple[int, int, int] | None:
+    if len(raw) <= max(first_offset, second_offset, third_offset):
+        return None
+    return raw[first_offset], raw[second_offset], raw[third_offset]
+
+
+def _fixed_secret_bytes(value: bytes | bytearray | memoryview) -> bytes:
+    return bytes(value).split(SADP_NUL_BYTE, 1)[0]
+
+
+def _fixed_secret_text(value: bytes | bytearray | memoryview) -> str:
+    raw = bytes(value)
+    if not raw:
+        return ""
+    with suppress(UnicodeDecodeError):
+        return raw.decode("utf-8")
+    return raw.decode("latin-1")
+
+
 def _mac_address_bytes(value: str | bytes) -> bytes:
     if isinstance(value, bytes):
         if len(value) != 6:
@@ -8834,14 +10761,41 @@ def _xml_opt_attr(
     *,
     parent: str | None = None,
 ) -> str | None:
+    return _xml_attr(root, name, "opt", parent=parent)
+
+
+def _xml_attr(
+    root: ET.Element,
+    name: str,
+    attr: str,
+    *,
+    parent: str | None = None,
+) -> str | None:
     for element in root.iter():
         if _xml_local_name(element).lower() != name.lower():
             continue
         if parent is not None and not _xml_has_parent(root, element, parent):
             continue
-        value = element.attrib.get("opt")
+        value = element.attrib.get(attr)
         return value if value else None
     return None
+
+
+def _xml_attr_int(
+    root: ET.Element,
+    name: str,
+    attr: str,
+    *,
+    parent: str | None = None,
+    default: int = 0,
+) -> int:
+    value = _xml_attr(root, name, attr, parent=parent)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
 
 
 def _xml_bool_opt_attr(root: ET.Element, name: str) -> bool | None:
@@ -8911,6 +10865,17 @@ def _xml_int_csv(value: str | None) -> tuple[int, ...]:
     return tuple(parsed)
 
 
+def _xml_child_int_csv_with_prefix(root: ET.Element, prefix: str) -> tuple[int, ...]:
+    parsed: list[int] = []
+    prefix_lower = prefix.lower()
+    for child in list(root):
+        if not _xml_local_name(child).lower().startswith(prefix_lower):
+            continue
+        text = child.text.strip() if child.text and child.text.strip() else None
+        parsed.extend(_xml_int_csv(text))
+    return tuple(parsed)
+
+
 def _xml_child_text(root: ET.Element, path: tuple[str, ...]) -> str | None:
     elements = [root]
     for name in path:
@@ -8926,6 +10891,177 @@ def _xml_child_text(root: ET.Element, path: tuple[str, ...]) -> str | None:
             return None
     text = elements[0].text
     return text.strip() if text and text.strip() else None
+
+
+def _xml_children(root: ET.Element, name: str) -> tuple[ET.Element, ...]:
+    return tuple(
+        child
+        for child in list(root)
+        if _xml_local_name(child).lower() == name.lower()
+    )
+
+
+def _xml_first_child(root: ET.Element, name: str) -> ET.Element | None:
+    children = _xml_children(root, name)
+    return children[0] if children else None
+
+
+def _ipc_front_parameter_field_root(root: ET.Element) -> ET.Element:
+    channel_list = _xml_first_child(root, "ChannelList")
+    if channel_list is None:
+        return root
+    channel_entry = _xml_first_child(channel_list, "ChannelEntry")
+    return channel_entry if channel_entry is not None else root
+
+
+def _xml_child_int(
+    root: ET.Element,
+    path: tuple[str, ...],
+    *,
+    default: int = 0,
+) -> int:
+    value = _xml_child_text(root, path)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _xml_child_optional_int(
+    root: ET.Element,
+    path: tuple[str, ...],
+) -> int | None:
+    value = _xml_child_text(root, path)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _xml_child_int_range(
+    root: ET.Element,
+    path: tuple[str, ...],
+) -> EzvizLanIpcFrontParameterRange:
+    return EzvizLanIpcFrontParameterRange(
+        minimum=_xml_child_int(root, (*path, "Min")),
+        maximum=_xml_child_int(root, (*path, "Max")),
+        default=_xml_child_optional_int(root, (*path, "Default")),
+    )
+
+
+def _audio_video_compress_stream(
+    root: ET.Element,
+    *,
+    index: int | None = None,
+) -> EzvizLanAudioVideoCompressStream:
+    bitrate_mins: list[int] = []
+    bitrate_maxes: list[int] = []
+    resolution_indexes: list[int] = []
+    frame_rates: list[int] = []
+    frame_rates.extend(_xml_child_int_csv_with_prefix(root, "VideoFrameRate"))
+    resolution_list = _xml_first_child(root, "VideoResolutionList")
+    if resolution_list is not None:
+        for entry in _xml_children(resolution_list, "VideoResolutionEntry"):
+            resolution_indexes.append(_xml_child_int(entry, ("Index",)))
+            frame_rates.extend(_xml_child_int_csv_with_prefix(entry, "VideoFrameRate"))
+            bitrate_min = _xml_child_int(entry, ("VideoBitrate", "Min"))
+            bitrate_max = _xml_child_int(entry, ("VideoBitrate", "Max"))
+            if bitrate_min:
+                bitrate_mins.append(bitrate_min)
+            if bitrate_max:
+                bitrate_maxes.append(bitrate_max)
+
+    return EzvizLanAudioVideoCompressStream(
+        index=index,
+        video_encode_type_range=_xml_child_text(root, ("VideoEncodeType", "Range")),
+        video_encode_efficiency_range=_xml_child_text(
+            root, ("VideoEncodeEfficiency", "Range")
+        ),
+        interval_bp_frame_range=_xml_child_text(root, ("IntervalBPFrame", "Range")),
+        e_frame=_xml_child_int(root, ("EFrame",)),
+        resolution_indexes=tuple(resolution_indexes),
+        frame_rates=tuple(dict.fromkeys(frame_rates)),
+        bitrate_min=min(bitrate_mins) if bitrate_mins else 0,
+        bitrate_max=max(bitrate_maxes) if bitrate_maxes else 0,
+    )
+
+
+def _audio_video_compress_video_channels(
+    root: ET.Element,
+) -> tuple[EzvizLanAudioVideoCompressVideoChannel, ...]:
+    channel_list = _xml_first_child(root, "ChannelList")
+    if channel_list is None:
+        return ()
+    channels: list[EzvizLanAudioVideoCompressVideoChannel] = []
+    for entry in _xml_children(channel_list, "ChannelEntry"):
+        main = _xml_first_child(entry, "MainChannel")
+        sub_list = _xml_first_child(entry, "SubChannelList")
+        sub_streams: list[EzvizLanAudioVideoCompressStream] = []
+        if sub_list is not None:
+            for sub_entry in _xml_children(sub_list, "SubChannelEntry"):
+                sub_streams.append(
+                    _audio_video_compress_stream(
+                        sub_entry,
+                        index=_xml_child_optional_int(sub_entry, ("index",)),
+                    )
+                )
+        channels.append(
+            EzvizLanAudioVideoCompressVideoChannel(
+                channel_number=_xml_child_int(entry, ("ChannelNumber",)),
+                main_stream=(
+                    _audio_video_compress_stream(main) if main is not None else None
+                ),
+                sub_streams=tuple(sub_streams),
+            )
+        )
+    return tuple(channels)
+
+
+def _audio_video_compress_audio_channels(
+    root: ET.Element,
+) -> tuple[EzvizLanAudioVideoCompressAudioChannel, ...]:
+    channel_list = _xml_first_child(root, "ChannelList")
+    if channel_list is None:
+        return ()
+    return tuple(
+        EzvizLanAudioVideoCompressAudioChannel(
+            channel_number=_xml_child_int(entry, ("ChannelNumber",)),
+            main_audio_encode_type_range=_xml_child_text(
+                entry, ("MainAudioEncodeType", "Range")
+            ),
+            sub_audio_encode_type_range=_xml_child_text(
+                entry, ("SubAudioEncodeType", "Range")
+            ),
+            audio_in_type_range=_xml_child_text(entry, ("AudioInType", "Range")),
+            audio_in_volume_min=_xml_child_int(entry, ("AudioInVolume", "Min")),
+            audio_in_volume_max=_xml_child_int(entry, ("AudioInVolume", "Max")),
+        )
+        for entry in _xml_children(channel_list, "ChannelEntry")
+    )
+
+
+def _audio_video_compress_voice_talk_channels(
+    root: ET.Element,
+) -> tuple[EzvizLanAudioVideoCompressVoiceTalkChannel, ...]:
+    channel_list = _xml_first_child(root, "ChannelList")
+    if channel_list is None:
+        return ()
+    return tuple(
+        EzvizLanAudioVideoCompressVoiceTalkChannel(
+            channel_number=_xml_child_int(entry, ("ChannelNumber",)),
+            voice_talk_encode_type_range=_xml_child_text(
+                entry, ("VoiceTalkEncodeType", "Range")
+            ),
+            voice_talk_in_type_range=_xml_child_text(
+                entry, ("VoiceTalkInType", "Range")
+            ),
+        )
+        for entry in _xml_children(channel_list, "ChannelEntry")
+    )
 
 
 def _xml_has_parent(root: ET.Element, child: ET.Element, parent: str) -> bool:
