@@ -23,25 +23,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.data.get(CONF_BASE_URL, DEFAULT_BASE_URL),
     )
 
-    def _login_and_list():
+    def _login_and_enumerate():
         client.login()
-        return client.get_devices()
+        cams = []
+        for dev in client.get_devices():
+            if not dev.local_ip:
+                continue
+            cams.extend(client.get_cameras(dev))
+        return cams
 
     try:
-        devices = await hass.async_add_executor_job(_login_and_list)
+        cameras = await hass.async_add_executor_job(_login_and_enumerate)
     except HikConnectAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
     except Exception as err:  # noqa: BLE001
         raise ConfigEntryNotReady(f"Hik-Connect setup failed: {err}") from err
 
-    streamable = [d for d in devices if d.local_ip]
     _LOGGER.info(
-        "Hik-Connect Local: %d device(s), %d LAN-reachable", len(devices), len(streamable)
+        "Hik-Connect Local: %d camera channel(s) across LAN-reachable devices",
+        len(cameras),
     )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "client": client,
-        "devices": streamable,
+        "cameras": cameras,
     }
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

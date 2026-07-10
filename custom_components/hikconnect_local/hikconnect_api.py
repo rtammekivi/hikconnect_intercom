@@ -36,6 +36,16 @@ class HikDevice:
     device_type: str
 
 
+@dataclass
+class HikCamera:
+    """A real (configured) channel on a device — one HA camera entity each."""
+
+    serial: str
+    channel: int
+    name: str
+    local_ip: str
+
+
 class HikConnectAuthError(Exception):
     """Login failed."""
 
@@ -101,6 +111,33 @@ class HikConnectClient:
             offset += limit
             has_next = (j.get("page") or {}).get("hasNext", False)
         return devices
+
+    def get_cameras(self, device: HikDevice) -> list[HikCamera]:
+        """Return the real (configured) channels for a device.
+
+        The cloud reports many phantom channels (name defaults to the serial,
+        signalStatus 0); a real door-station channel is either named or has
+        signal.  Falls back to channel 1 if the list can't be read.
+        """
+        cams: list[HikCamera] = []
+        try:
+            j = self._get(
+                f"/v3/userdevices/v1/cameras/info?deviceSerial={device.serial}"
+            )
+            for c in j.get("cameraInfos", []):
+                ch = c.get("channelNo")
+                if ch is None:
+                    continue
+                name = c.get("cameraName") or device.serial
+                sig = (c.get("deviceChannelInfo") or {}).get("signalStatus", 0)
+                if name != device.serial or sig == 1:
+                    cams.append(HikCamera(device.serial, int(ch), name, device.local_ip))
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("cameras/info failed for %s: %s", device.serial, err)
+        if not cams:
+            cams.append(HikCamera(device.serial, 1, device.name, device.local_ip))
+        cams.sort(key=lambda c: c.channel)
+        return cams
 
     # -- CPD7 control key -------------------------------------------------
     @property
