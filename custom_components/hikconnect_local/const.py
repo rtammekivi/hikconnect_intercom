@@ -32,6 +32,9 @@ DOOR_LATCH_UNLOCKED_FOR = 5
 # accelerates this to near real time, so the baseline can stay gentle.
 CALL_POLL_INTERVAL = 10
 
+# Device telemetry (online, wifi, firmware, disk) changes slowly — poll gently.
+STATUS_POLL_INTERVAL = 60
+
 CALL_STATUS_MAPPING = {1: "idle", 2: "ringing", 3: "call in progress"}
 CALL_STATES = ["idle", "ringing", "call in progress"]  # "unknown" -> None (reserved state)
 

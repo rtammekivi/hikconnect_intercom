@@ -30,6 +30,15 @@ _HEADERS = {"clientType": "55", "lang": "en-US", "featureCode": FEATURE_CODE}
 _CALL_STATUS = {1: "idle", 2: "ringing", 3: "call in progress"}
 
 
+def _csv_first_int(value: str | None) -> int | None:
+    """First field of a "14,-1,-1,..." CSV string as int (negatives -> None)."""
+    try:
+        v = int(str(value).split(",")[0])
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return v if v >= 0 else None
+
+
 @dataclass
 class HikDevice:
     serial: str
@@ -37,6 +46,7 @@ class HikDevice:
     local_ip: str | None
     device_type: str
     locks: dict[int, int] = field(default_factory=dict)  # channel -> lock count
+    version: str = ""
 
 
 @dataclass
@@ -116,6 +126,7 @@ class HikConnectClient:
                         ip,
                         d.get("deviceType", ""),
                         self._parse_locks(stats.get(serial) or {}),
+                        d.get("version", ""),
                     )
                 )
             offset += limit
@@ -194,6 +205,60 @@ class HikConnectClient:
         data = json.loads(r["data"])
         status = _CALL_STATUS.get(data.get("callStatus"), "unknown")
         return {"status": status, "info": data.get("callerInfo") or {}}
+
+    # -- device status / metrics ------------------------------------------
+    def get_device_status_map(self) -> dict[str, dict]:
+        """Per-serial telemetry parsed from the cloud device list."""
+        out: dict[str, dict] = {}
+        limit, offset, has_next = 50, 0, True
+        while has_next:
+            path = (
+                "/v3/userdevices/v1/devices/pagelist"
+                f"?groupId=-1&limit={limit}&offset={offset}"
+                "&filter=CONNECTION,STATUS,STATUS_EXT,WIFI,P2P"
+            )
+            j = self._get(path)
+            conns = j.get("connectionInfos") or {}
+            stats = j.get("statusInfos") or {}
+            wifis = j.get("wifiInfos") or {}
+            for d in j.get("deviceInfos", []):
+                serial = d["deviceSerial"]
+                st = stats.get(serial) or {}
+                conn = conns.get(serial) or {}
+                wifi = wifis.get(serial) or {}
+                opt = st.get("optionals") or {}
+                gs = st.get("globalStatus")
+                disk_num = st.get("diskNum") or 0
+                out[serial] = {
+                    "online": (gs == 1) if gs is not None else (d.get("status") == 1),
+                    "version": d.get("version"),
+                    "model": d.get("deviceType"),
+                    "wan_ip": self._clean_ip(conn.get("netIp") or opt.get("wanIp")),
+                    "wifi_signal": wifi.get("signal")
+                    if isinstance(wifi.get("signal"), int)
+                    else None,
+                    "wireless": (wifi.get("netType") == "wireless")
+                    if wifi.get("netType")
+                    else None,
+                    "upgrade_available": bool(st.get("upgradeAvailable")),
+                    "disk_present": disk_num > 0,
+                    "disk_capacity_gb": _csv_first_int(opt.get("diskCapacity"))
+                    if disk_num
+                    else None,
+                    "disk_ok": (_csv_first_int(opt.get("diskHealth")) == 0)
+                    if disk_num
+                    else None,
+                    "offline_timestamp": d.get("offlineTimestamp"),
+                }
+            offset += limit
+            has_next = (j.get("page") or {}).get("hasNext", False)
+        return out
+
+    @staticmethod
+    def _clean_ip(value: str | None) -> str | None:
+        if not value or value in ("0.0.0.0", ""):
+            return None
+        return value
 
     @staticmethod
     def _parse_locks(status_info: dict) -> dict[int, int]:

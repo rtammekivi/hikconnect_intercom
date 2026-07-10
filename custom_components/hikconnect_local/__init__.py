@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
@@ -19,6 +20,7 @@ from .const import (
     CONF_PASSWORD,
     DEFAULT_BASE_URL,
     DOMAIN,
+    STATUS_POLL_INTERVAL,
     call_signal,
 )
 from .hikconnect_api import HikConnectAuthError, HikConnectClient
@@ -30,6 +32,7 @@ PLATFORMS = [
     Platform.BUTTON,
     Platform.LOCK,
     Platform.SENSOR,
+    Platform.BINARY_SENSOR,
     Platform.SELECT,
 ]
 
@@ -85,6 +88,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     await coordinator.async_config_entry_first_refresh()
 
+    async def _poll_status() -> dict[str, dict]:
+        return await hass.async_add_executor_job(client.get_device_status_map)
+
+    status_coordinator = DataUpdateCoordinator(
+        hass,
+        _LOGGER,
+        name=f"{DOMAIN}_status",
+        update_method=_poll_status,
+        update_interval=timedelta(seconds=STATUS_POLL_INTERVAL),
+    )
+    await status_coordinator.async_config_entry_first_refresh()
+
+    registry = dr.async_get(hass)
+    for device in devices:
+        registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, device.serial)},
+            manufacturer="Hikvision",
+            name=device.name,
+            model=device.device_type,
+            sw_version=device.version or None,
+        )
+
     # Realtime push: a call event just triggers an immediate authoritative poll.
     unsubs = []
     for dev in devices:
@@ -110,6 +136,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "devices": devices,
         "cameras": cameras,
         "coordinator": coordinator,
+        "status_coordinator": status_coordinator,
         "push": push,
         "unsubs": unsubs,
         "quality": {},  # (serial_chN -> MAIN|SUB), shared: select writes, camera reads

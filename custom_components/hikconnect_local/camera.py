@@ -83,11 +83,7 @@ class HikLocalCamera(Camera):
 
     @property
     def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._cam.serial)},
-            name=self._cam.serial,
-            manufacturer="Hikvision",
-        )
+        return DeviceInfo(identifiers={(DOMAIN, self._cam.serial)})
 
     # -- stream plumbing --------------------------------------------------
     async def _control_key(self) -> str:
