@@ -19,16 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Vendored components retain their original licenses:
-
-- custom_components/ezviz_hp7/cpd7/ — adapted from albrzmr/ezviz_hp7 (MIT,
-  Copyright albrzmr). CPD7 LAN protocol reverse engineering by albrzmr.
-- custom_components/ezviz_hp7/mjpeg.py — MJPEG approach adapted from
-  albrzmr/ezviz_hp7 (MIT, Copyright albrzmr).
-- custom_components/ezviz_hp7/pylocalapi/ — vendored from
-  RenierM26/pyEzvizApi (Apache License 2.0, Copyright Renier Moorcroft).
-  See https://github.com/RenierM26/pyEzvizApi/blob/main/LICENSE.md for the
-  full license text, which continues to apply to that directory.
