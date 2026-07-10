@@ -14,6 +14,20 @@
           "server": "Pick your region, or Custom to enter an API URL. Global auto-routes to the right region.",
           "base_url": "e.g. apiieu.hik-connect.com — used only when Server is set to Custom."
         }
+      },
+      "reconfigure": {
+        "title": "Hik-Connect Local",
+        "description": "Change the server or account for this integration. Leave the password blank to keep the current one.",
+        "data": {
+          "account": "Account (email or username)",
+          "password": "Password (blank = keep current)",
+          "server": "Server",
+          "base_url": "Custom API URL (only when Server is Custom)"
+        },
+        "data_description": {
+          "server": "Pick your region, or Custom to enter an API URL. Global auto-routes to the right region.",
+          "base_url": "e.g. apiieu.hik-connect.com — used only when Server is set to Custom."
+        }
       }
     },
     "error": {
@@ -22,7 +36,9 @@
       "custom_url_required": "Select a server, or choose Custom and enter an API URL."
     },
     "abort": {
-      "already_configured": "This account is already configured."
+      "already_configured": "This account is already configured.",
+      "account_mismatch": "The account must match the one this integration was set up with. To use a different account, add a new integration.",
+      "reconfigure_successful": "Server updated."
     }
   }
 }
