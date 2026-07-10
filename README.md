@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="custom_components/hikconnect_local/icon.png" width="128" alt="Hik-Connect Local"/>
+</p>
+
 # Hik-Connect Local
 
 Native **local** video for Hik-Connect indoor stations / video intercoms
