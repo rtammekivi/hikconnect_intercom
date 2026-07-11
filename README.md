@@ -4,15 +4,28 @@
 
 # Hik-Connect Local
 
-Native **local** video for Hik-Connect indoor stations / video intercoms
-(e.g. `DS-KH6320-WTE1`) in Home Assistant — no cloud relay, no phone, no
-port-8000 admin password.
+Home Assistant integration for **Hikvision video intercoms / indoor stations**
+(e.g. `DS-KH6320-WTE1`) that you **can't administer locally** — the common case
+in **apartments and managed buildings**, where an installer or property-management
+/ security company keeps the device admin password and the local ISAPI/SDK port
+(8000). You only have the **Hik-Connect app account**, not the admin credentials —
+so the usual local Hikvision integrations (which need that password) don't work.
 
-It logs into your **Hik-Connect account** only to (a) list your devices and their
-LAN IP and (b) fetch each device's per-device stream key from the shared CAS
-cloud. The video itself is pulled **directly from the station over your LAN** using
-the CPD7 protocol (ports 9010/9020), decrypted/de-framed in pure Python, and
-served to HA as an MJPEG camera.
+This one needs only that account — **no admin password, no phone, no port-8000
+access**:
+
+- **Video is local.** The live stream is pulled **directly from the station over
+  your LAN** (CPD7 protocol, ports 9010/9020), decrypted/de-framed in pure Python
+  and served to HA as MJPEG — no cloud relay for the video.
+- **Everything else is cloud**, using the same calls the app makes (authorized by
+  your account session, no admin password): device discovery + LAN IP, the
+  per-device stream key (CAS), door unlock, answer/hang-up/cancel, call status,
+  volumes, Do-Not-Disturb, time, and telemetry — via the Hik-Connect cloud and its
+  ISAPI passthrough.
+
+> ⚠️ **Hybrid, not local-only.** The name keeps "local" because the *video* is
+> local (the hard part, and the differentiator from cloud-relay integrations), but
+> discovery and all controls go through the Hik-Connect cloud.
 
 This started as a fork of
 [Bobsilvio/ezviz_hp7](https://github.com/Bobsilvio/ezviz_hp7) (the EZVIZ HP7
@@ -23,6 +36,8 @@ so a dedicated decoder (`lib/hik_decoder.py`) replaces the HP7 ChaCha20 path.
 
 ## How it works
 
+**Video (local):**
+
 ```
 Hik-Connect login ──► device list + LAN IP        (cloud, once)
                 └────► CAS getDevOperationCode ──► 16-byte AES control key
@@ -30,6 +45,13 @@ Cpd7LanClient (9010 INIT/INVITE/PLAY, AES-128-CBC control) ──► 9020 stream
    └─► HikStreamDecoder: strip $01 framing + 12B RTP + 13B Hik header ──► H.264
         └─► ffmpeg H.264 ─► MJPEG ─► Home Assistant camera
 ```
+
+**Controls / config / status (cloud):** relayed through the Hik-Connect cloud —
+`/api/device/isapi` tunnels **standard Hikvision ISAPI** to the device (volumes,
+time), `/v3/devconfig/.../remote/unlock` and `/call/.../operation` handle door +
+call ops, `configTimeZone` + `nodisturb` cover DST + Do-Not-Disturb — **all
+authorized by your account session, no device admin password needed.** This is
+what makes the integration usable on locked-down apartment installs.
 
 ## Install (HACS)
 
@@ -48,7 +70,8 @@ A camera entity is created for each LAN-reachable device. Live view uses MJPEG
 - **Lock** — one per unlock-capable channel; opens the door latch (momentary,
   auto-relocks after a few seconds). Uses the cloud remote-unlock endpoint.
 - **Buttons** — *Answer call*, *Hang up call*, *Cancel call* (cloud call ops),
-  and *Unlock all doors* (opens every lock-capable channel at once).
+  *Unlock all doors* (opens every lock-capable channel at once), and *Sync time*
+  (config; sets the station clock to HA's DST-aware local time via ISAPI).
 - **Call status sensor** — `idle` / `ringing` / `call in progress`. State comes
   from the authoritative cloud poll; a realtime MQTT push event triggers an
   immediate re-poll so ringing shows in near real time.
@@ -59,11 +82,12 @@ A camera entity is created for each LAN-reachable device. Live view uses MJPEG
   silenced (`/v3/unifiedmsg/notify/nodisturb`).
 - **Daylight-saving switch** — device time config (`/api/device/configTimeZone`).
 - **Diagnostics** — connectivity, firmware-update, storage health binary sensors;
-  WiFi signal, WAN IP, connection type, storage capacity, last-offline sensors.
+  WiFi signal, LAN IP, WAN IP, connection type, storage capacity, last-offline.
 - **Stream quality select** — HD (main) / SD (sub) per camera.
 
-Call/door controls and status go through the Hik-Connect cloud (the video stays
-fully local). Unlock/answer/hangup/cancel are the same operations the app sends.
+All controls, config, and status go through the Hik-Connect **cloud** (authorized
+by your account, no admin password) — the same operations the app performs. Only
+the **video** is pulled locally over the LAN.
 
 ## Status / limits
 
