@@ -1,4 +1,4 @@
-"""Config flow for Hik-Connect Local."""
+"""Config flow for Hik-Connect Intercom."""
 
 from __future__ import annotations
 

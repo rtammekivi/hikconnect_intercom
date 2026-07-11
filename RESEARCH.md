@@ -207,7 +207,7 @@ End-to-end proven from a LAN box: `HikConnectClient.login()` → `get_devices()`
 (LAN IP <DEVICE-LAN-IP>) → `get_control_key()` (CAS) → `Cpd7LanClient` →
 `HikStreamDecoder` → **328 KB H.264, ffprobe = Baseline 1280×720 25fps, decodes to
 a live door frame.** No phone, no frida, no hard-coded key. Built in
-`rtammekivi/hikconnect_local`: `hikconnect_api.py`, `lib/hik_decoder.py`.
+`rtammekivi/hikconnect_intercom`: `hikconnect_api.py`, `lib/hik_decoder.py`.
 
 ---
 

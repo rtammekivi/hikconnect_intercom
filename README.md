@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="custom_components/hikconnect_local/brand/icon.png" width="128" alt="Hik-Connect Local"/>
+  <img src="custom_components/hikconnect_intercom/brand/icon.png" width="128" alt="Hik-Connect Intercom"/>
 </p>
 
-# Hik-Connect Local
+# Hik-Connect Intercom
 
 Home Assistant integration for **Hikvision video intercoms / indoor stations**
 (e.g. `DS-KH6320-WTE1`) that you **can't administer locally** — the common case
@@ -23,14 +23,14 @@ access**:
   volumes, Do-Not-Disturb, time, and telemetry — via the Hik-Connect cloud and its
   ISAPI passthrough.
 
-> ⚠️ **Hybrid, not local-only.** The name keeps "local" because the *video* is
-> local (the hard part, and the differentiator from cloud-relay integrations), but
-> discovery and all controls go through the Hik-Connect cloud.
+> ⚠️ **Hybrid, not local-only.** Only the *video* is local (pulled from the station
+> over your LAN — the hard part, and the differentiator from cloud-relay
+> integrations); device discovery and all controls go through the Hik-Connect cloud.
 
 This started as a fork of
 [Bobsilvio/ezviz_hp7](https://github.com/Bobsilvio/ezviz_hp7) (the EZVIZ HP7
 CPD7 work — thank you). The CPD7 `lan_client`, ECDH/ChaCha20 `crypto`, and the
-`pylocalapi` CAS client are vendored under `custom_components/hikconnect_local/lib/`.
+`pylocalapi` CAS client are vendored under `custom_components/hikconnect_intercom/lib/`.
 Hik-Connect indoor stations send the local media **unencrypted** (Hikvision RTP),
 so a dedicated decoder (`lib/hik_decoder.py`) replaces the HP7 ChaCha20 path.
 
@@ -56,9 +56,9 @@ what makes the integration usable on locked-down apartment installs.
 ## Install (HACS)
 
 1. HACS → ⋮ → **Custom repositories** → add
-   `https://github.com/rtammekivi/hikconnect_local`, type **Integration**.
-2. Install **Hik-Connect Local**, restart Home Assistant.
-3. **Settings → Devices & Services → Add Integration → Hik-Connect Local**,
+   `https://github.com/rtammekivi/hikconnect_intercom`, type **Integration**.
+2. Install **Hik-Connect Intercom**, restart Home Assistant.
+3. **Settings → Devices & Services → Add Integration → Hik-Connect Intercom**,
    enter your Hik-Connect account + password.
 
 A camera entity is created for each LAN-reachable device. Live view uses MJPEG

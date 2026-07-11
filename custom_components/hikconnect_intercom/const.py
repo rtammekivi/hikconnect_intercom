@@ -1,6 +1,6 @@
-"""Constants for the hikconnect_local integration."""
+"""Constants for the hikconnect_intercom integration."""
 
-DOMAIN = "hikconnect_local"
+DOMAIN = "hikconnect_intercom"
 
 CONF_ACCOUNT = "account"
 CONF_PASSWORD = "password"

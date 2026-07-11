@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "Hik-Connect Local",
+        "title": "Hik-Connect Intercom",
         "description": "Log in with your Hik-Connect account. The video is pulled directly from the indoor station over your LAN (CPD7); the cloud is used only to fetch the device list and per-device stream key.",
         "data": {
           "account": "Account (email or username)",
@@ -16,7 +16,7 @@
         }
       },
       "reconfigure": {
-        "title": "Hik-Connect Local",
+        "title": "Hik-Connect Intercom",
         "description": "Change the server or account for this integration. Leave the password blank to keep the current one.",
         "data": {
           "account": "Account (email or username)",

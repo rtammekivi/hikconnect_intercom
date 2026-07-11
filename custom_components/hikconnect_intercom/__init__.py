@@ -1,4 +1,4 @@
-"""Hik-Connect Local: native LAN video for Hik-Connect indoor stations (CPD7)."""
+"""Hik-Connect Intercom: native LAN video for Hik-Connect indoor stations (CPD7)."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady(f"Hik-Connect setup failed: {err}") from err
 
     _LOGGER.info(
-        "Hik-Connect Local: %d device(s), %d camera channel(s)",
+        "Hik-Connect Intercom: %d device(s), %d camera channel(s)",
         len(devices), len(cameras),
     )
 

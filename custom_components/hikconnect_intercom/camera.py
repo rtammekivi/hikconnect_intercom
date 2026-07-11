@@ -1,4 +1,4 @@
-"""Camera entities for Hik-Connect Local — native CPD7 LAN stream.
+"""Camera entities for Hik-Connect Intercom — native CPD7 LAN stream.
 
 One entity per real channel (door station).  A CPD7 client is opened **per active
 view/snapshot** and closed as soon as the viewer disconnects or the snapshot is

@@ -1,6 +1,6 @@
 # Third-party licenses
 
-Vendored components under `custom_components/hikconnect_local/lib/` retain their
+Vendored components under `custom_components/hikconnect_intercom/lib/` retain their
 original licenses:
 
 - `lib/lan_client.py`, `lib/crypto.py` — CPD7 LAN protocol (control + ECDH/
@@ -15,4 +15,4 @@ original licenses:
   apply to that code.
 
 `lib/hik_decoder.py` (unencrypted Hik-Connect indoor-station media decoder) and
-the rest of `custom_components/hikconnect_local/` are original to this project.
+the rest of `custom_components/hikconnect_intercom/` are original to this project.
