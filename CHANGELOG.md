@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.5](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.9.4...v0.9.5) (2026-07-12)
+
+
+### Bug Fixes
+
+* **api:** renew the cloud session instead of silently serving no data ([165af52](https://github.com/rtammekivi/hikconnect_intercom/commit/165af52cae78519c7601d2ee50dd5cb271c1644f))
+
 ## [0.9.4](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.9.3...v0.9.4) (2026-07-11)
 
 
