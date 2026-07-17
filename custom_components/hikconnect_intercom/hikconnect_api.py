@@ -216,14 +216,31 @@ class HikConnectClient:
             f"?srcId=1&lockId={lock_index}&userType=0"
         )
 
+    def _call_operation(self, serial: str, cmd_id: int, what: str) -> dict:
+        """Send a call-operation cmdId, raising if the station rejects it.
+
+        The cloud returns meta.code 200 even when the station refuses the
+        command; the real result is the device's ``data.rc`` (1 == ok). Without
+        this the button silently no-ops on a rejection (e.g. rc 1952).
+        """
+        r = self._put(f"/v3/devconfig/v1/call/{serial}/operation?cmdId={cmd_id}")
+        meta = (r.get("meta") or {}).get("code")
+        try:
+            rc = json.loads(r.get("data") or "{}").get("rc")
+        except (ValueError, TypeError):
+            rc = None
+        if meta != 200 or (rc is not None and rc != 1):
+            raise HikConnectError(f"{what} rejected (meta={meta}, rc={rc})")
+        return r
+
     def answer_call(self, serial: str) -> dict:
-        return self._put(f"/v3/devconfig/v1/call/{serial}/operation?cmdId=2")
+        return self._call_operation(serial, 2, "answer")
 
     def cancel_call(self, serial: str) -> dict:
-        return self._put(f"/v3/devconfig/v1/call/{serial}/operation?cmdId=3")
+        return self._call_operation(serial, 3, "cancel")
 
     def hangup_call(self, serial: str) -> dict:
-        return self._put(f"/v3/devconfig/v1/call/{serial}/operation?cmdId=5")
+        return self._call_operation(serial, 5, "hangup")
 
     def get_call_status(self, serial: str) -> dict:
         """Return {'status': idle|ringing|call in progress|unknown, 'info': {...}}."""
