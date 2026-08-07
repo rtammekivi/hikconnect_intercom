@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.4](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.3...v0.10.4) (2026-08-07)
+
+
+### Performance Improvements
+
+* **camera:** hold the warm pipeline 10s, not 30s ([bf3f0af](https://github.com/rtammekivi/hikconnect_intercom/commit/bf3f0afcaff821a8e246da0022e5807cb6a9656d))
+
 ## [0.10.3](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.2...v0.10.3) (2026-08-07)
 
 
