@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.0...v0.10.1) (2026-08-07)
+
+
+### Bug Fixes
+
+* **camera:** drop stale MJPEG frames and evict whole GOPs ([a434d86](https://github.com/rtammekivi/hikconnect_intercom/commit/a434d860078f942216da59d7fb088c4abe30b9aa))
+
 ## [0.10.0](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.9.5...v0.10.0) (2026-07-17)
 
 
