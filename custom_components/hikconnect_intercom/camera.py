@@ -51,11 +51,12 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     client = data["client"]
     quality = data["quality"]
+    status = data["status_coordinator"]
     sems: dict[str, asyncio.Semaphore] = {}
     entities = []
     for cam in data["cameras"]:
         sem = sems.setdefault(cam.serial, asyncio.Semaphore(_MAX_STREAMS_PER_DEVICE))
-        entities.append(HikLocalCamera(hass, client, cam, sem, quality))
+        entities.append(HikLocalCamera(hass, client, cam, sem, quality, status))
     async_add_entities(entities)
 
 
@@ -70,7 +71,7 @@ class _ChannelStream:
 
     def __init__(
         self, hass: HomeAssistant, client, cam: HikCamera, sem: asyncio.Semaphore,
-        quality: dict[str, str], qkey: str,
+        quality: dict[str, str], qkey: str, status,
     ) -> None:
         self._hass = hass
         self._client = client
@@ -78,6 +79,8 @@ class _ChannelStream:
         self._sem = sem
         self._quality = quality
         self._qkey = qkey
+        self._status = status
+        self._ip: str | None = None
         self._key: str | None = None
         self._lan: Cpd7LanClient | None = None
         self._pump: asyncio.Task | None = None
@@ -145,6 +148,25 @@ class _ChannelStream:
         self._pump = asyncio.create_task(self._pump_loop())
         return True
 
+    def _current_ip(self) -> str | None:
+        """The station's LAN IP as of the latest status poll.
+
+        The cloud's address follows the station's DHCP lease, so the value read
+        once at setup goes stale the moment it changes and the feed stays dead
+        until someone reloads the entry.  The status coordinator already
+        refreshes it every poll, so read it from there.
+        """
+        st = (self._status.data or {}).get(self._cam.serial) or {}
+        ip = st.get("local_ip") or self._cam.local_ip
+        if ip and ip != self._ip:
+            if self._ip is not None:
+                _LOGGER.info(
+                    "%s ch%d (%s): station moved %s -> %s",
+                    self._cam.serial, self._cam.channel, self._cam.name, self._ip, ip,
+                )
+            self._ip = ip
+        return ip
+
     async def _open_lan(self) -> Cpd7LanClient | None:
         """Open a CPD7 stream, or None if the channel has no live feed.
 
@@ -152,6 +174,9 @@ class _ChannelStream:
         stale cached key makes it reject the stream (``Result 3``).  Retry once
         with a freshly fetched key so the feed self-heals without a reload.
         """
+        host = self._current_ip()
+        if host is None:
+            return None
         for refresh in (False, True):
             try:
                 if self._key is None or refresh:
@@ -159,7 +184,7 @@ class _ChannelStream:
                         self._client.get_control_key, self._cam.serial
                     )
                 c = Cpd7LanClient(
-                    self._cam.local_ip,
+                    host,
                     self._cam.serial,
                     self._key.encode("ascii"),
                     channel=self._cam.channel,
@@ -182,8 +207,8 @@ class _ChannelStream:
                 )
             except Exception as err:  # noqa: BLE001 - offline sub-stations error here
                 _LOGGER.warning(
-                    "no live feed for %s ch%d (%s): %s",
-                    self._cam.serial, self._cam.channel, self._cam.name, err,
+                    "no live feed for %s ch%d (%s) at %s: %s",
+                    self._cam.serial, self._cam.channel, self._cam.name, host, err,
                 )
                 return None
         return None
@@ -334,12 +359,15 @@ class HikLocalCamera(Camera):
         cam: HikCamera,
         sem: asyncio.Semaphore,
         quality: dict[str, str],
+        status,
     ) -> None:
         super().__init__()
         self.hass = hass
         self._cam = cam
         self._qkey = f"{cam.serial}_ch{cam.channel}"
-        self._source = _ChannelStream(hass, client, cam, sem, quality, self._qkey)
+        self._source = _ChannelStream(
+            hass, client, cam, sem, quality, self._qkey, status
+        )
         self._jpeg: bytes | None = None
         self._jpeg_ts = 0.0
         self._attr_name = cam.name
