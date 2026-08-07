@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.1...v0.10.2) (2026-08-07)
+
+
+### Bug Fixes
+
+* **camera:** follow the station's LAN IP instead of caching it at setup ([c435ce0](https://github.com/rtammekivi/hikconnect_intercom/commit/c435ce07aaae157e040a8e41a9d1d24c6f4fe359))
+
 ## [0.10.1](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.0...v0.10.1) (2026-08-07)
 
 
