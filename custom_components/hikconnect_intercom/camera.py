@@ -2,21 +2,20 @@
 
 One entity per real channel (door station).  The station only serves a couple of
 concurrent CPD7 streams, so each camera keeps **one** shared upstream connection
-open while at least one consumer (live viewer or snapshot) is active and
-broadcasts the decoded H.264 to all of them.  N browsers viewing the same camera
-therefore cost one station connection, not N.
+*and* **one** shared ffmpeg encoder open while at least one consumer (live viewer
+or snapshot) is active.  N browsers viewing the same camera therefore cost one
+station connection and one encoder, not N.
 
 Pipeline (all local, no cloud/phone/frida):
   Cpd7LanClient (9010/9020, AES-128 control key from CAS, per-channel)
     -> HikStreamDecoder (strip $01 framing + 12B RTP + 13B Hik header -> H.264)
-    -> per-viewer ffmpeg (H.264 -> MJPEG) -> browser / snapshot.
+    -> shared ffmpeg (H.264 -> JPEG) -> newest frame -> browsers / snapshots.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import time
 
 import logging
 
@@ -36,13 +35,15 @@ from .lib.lan_client import ControlKeyError, Cpd7LanClient
 _LOGGER = logging.getLogger(__name__)
 
 _SC = b"\x00\x00\x00\x01"     # H.264 Annex-B start code
-_MJPEG_BOUNDARY = "ffmpeg"
+_EOI = b"\xff\xd9"            # JPEG end-of-image
+_MJPEG_BOUNDARY = "frame"
 _MAX_EMPTY_READS = 3
-_SNAPSHOT_TTL = 10.0          # reuse a recent still instead of re-opening a stream
 _MAX_STREAMS_PER_DEVICE = 2   # concurrent *upstreams* (channels), not viewers
 _ACQUIRE_TIMEOUT = 6.0
-_LINGER_SEC = 4.0             # hold the upstream briefly after the last viewer leaves
-_SUB_QUEUE_MAX = 240          # bounded per-viewer backlog; slow viewers drop frames
+_LINGER_SEC = 30.0            # keep the pipeline warm so reopening is instant
+_FEED_QUEUE_MAX = 240         # bounded backlog into ffmpeg; drops whole GOPs
+_FIRST_FRAME_TIMEOUT = 12.0
+_FRAME_TIMEOUT = 10.0
 
 
 async def async_setup_entry(
@@ -61,12 +62,13 @@ async def async_setup_entry(
 
 
 class _ChannelStream:
-    """One shared CPD7 upstream for a single camera channel, fanned out to N viewers.
+    """One CPD7 upstream and one ffmpeg encoder per channel, shared by all viewers.
 
-    HA calls the camera's snapshot/stream handlers once per viewer; each used to
-    open its own station socket, exhausting the station's few stream slots.  This
-    keeps exactly one upstream open while >=1 consumer is subscribed and broadcasts
-    the decoded H.264 to every subscriber's queue.
+    Every consumer used to spawn its own ffmpeg, so each open paid the encoder's
+    full start-up and a card preview followed by a live view cost two processes.
+    One encoder per channel publishes the newest JPEG instead; consumers read
+    that, and the pipeline lingers after the last one leaves so reopening it is
+    instant rather than a fresh cold start.
     """
 
     def __init__(
@@ -83,39 +85,37 @@ class _ChannelStream:
         self._ip: str | None = None
         self._key: str | None = None
         self._lan: Cpd7LanClient | None = None
-        self._pump: asyncio.Task | None = None
+        self._proc: asyncio.subprocess.Process | None = None
+        self._queue: asyncio.Queue | None = None
+        self._tasks: list[asyncio.Task] = []
         self._stopping = False
-        self._subs: set[asyncio.Queue] = set()
+        self._users = 0
+        self._jpeg: bytes | None = None
+        self._seq = 0
+        self._waiters: set[asyncio.Event] = set()
         self._sps = b""
         self._pps = b""
         self._lock = asyncio.Lock()
         self._linger: asyncio.TimerHandle | None = None
 
-    # -- subscription -----------------------------------------------------
-    async def subscribe(self) -> asyncio.Queue | None:
-        """Attach a consumer, opening the shared upstream on the first one.
-
-        Returns a queue that yields Annex-B H.264 (and finally ``None`` when the
-        upstream ends), or ``None`` if no live feed could be opened.
-        """
+    # -- consumer lifecycle ----------------------------------------------
+    async def acquire(self) -> bool:
+        """Register a consumer, starting the pipeline if it isn't already up."""
         async with self._lock:
             if self._linger is not None:
                 self._linger.cancel()
                 self._linger = None
-            if self._lan is not None and self._pump is not None and self._pump.done():
-                await self._teardown()  # upstream died — reopen a fresh one
-            if self._lan is None and not await self._open():
-                return None
-            q: asyncio.Queue = asyncio.Queue(maxsize=_SUB_QUEUE_MAX)
-            if self._sps and self._pps:  # prime late joiners with SPS/PPS
-                q.put_nowait((False, self._sps + self._pps))
-            self._subs.add(q)
-            return q
+            if self._proc is not None and any(t.done() for t in self._tasks):
+                await self._teardown()  # pipeline died — rebuild it
+            if self._proc is None and not await self._open():
+                return False
+            self._users += 1
+            return True
 
-    async def unsubscribe(self, q: asyncio.Queue) -> None:
+    async def release(self) -> None:
         async with self._lock:
-            self._subs.discard(q)
-            if self._subs or self._lan is None:
+            self._users = max(0, self._users - 1)
+            if self._users or self._proc is None:
                 return
             loop = asyncio.get_running_loop()
             self._linger = loop.call_later(
@@ -125,10 +125,40 @@ class _ChannelStream:
     async def _linger_teardown(self) -> None:
         async with self._lock:
             self._linger = None
-            if not self._subs:
+            if not self._users:
                 await self._teardown()
 
-    # -- upstream lifecycle ----------------------------------------------
+    # -- frame delivery ---------------------------------------------------
+    @property
+    def latest(self) -> tuple[int, bytes] | None:
+        return (self._seq, self._jpeg) if self._jpeg is not None else None
+
+    async def frame_after(self, seq: int, timeout: float) -> tuple[int, bytes] | None:
+        """Wait for a frame newer than ``seq``; None if none arrives in time.
+
+        Consumers always jump to the newest frame rather than draining a queue,
+        so one that reads slowly skips frames instead of falling progressively
+        further behind for the rest of the session.
+        """
+        if self._seq > seq and self._jpeg is not None:
+            return self._seq, self._jpeg
+        ev = asyncio.Event()
+        self._waiters.add(ev)
+        try:
+            await asyncio.wait_for(ev.wait(), timeout)
+        except (TimeoutError, asyncio.TimeoutError):
+            return None
+        finally:
+            self._waiters.discard(ev)
+        return self.latest
+
+    def _publish(self, jpeg: bytes) -> None:
+        self._jpeg = jpeg
+        self._seq += 1
+        for ev in self._waiters:
+            ev.set()
+
+    # -- pipeline lifecycle ----------------------------------------------
     async def _open(self) -> bool:
         try:
             await asyncio.wait_for(self._sem.acquire(), timeout=_ACQUIRE_TIMEOUT)
@@ -143,9 +173,35 @@ class _ChannelStream:
         if lan is None:
             self._sem.release()
             return False
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                get_ffmpeg_manager(self._hass).binary, "-loglevel", "error",
+                "-fflags", "+discardcorrupt", "-f", "h264", "-i", "pipe:0",
+                "-an", "-c:v", "mjpeg", "-q:v", str(MJPEG_QUALITY), "-r", str(MJPEG_FPS),
+                "-vf", f"scale={MJPEG_WIDTH}:{MJPEG_HEIGHT}",
+                "-f", "image2pipe", "pipe:1",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("ffmpeg failed to start for %s: %s", self._cam.name, err)
+            with contextlib.suppress(Exception):
+                await self._hass.async_add_executor_job(lan.close)
+            self._sem.release()
+            return False
         self._lan = lan
+        self._proc = proc
         self._stopping = False
-        self._pump = asyncio.create_task(self._pump_loop())
+        self._jpeg = None
+        self._queue = asyncio.Queue(maxsize=_FEED_QUEUE_MAX)
+        if self._sps and self._pps:  # let ffmpeg decode before the next IDR
+            self._queue.put_nowait((False, self._sps + self._pps))
+        self._tasks = [
+            asyncio.create_task(self._pump_loop()),
+            asyncio.create_task(self._feed_loop()),
+            asyncio.create_task(self._read_loop()),
+        ]
         return True
 
     def _current_ip(self) -> str | None:
@@ -214,6 +270,7 @@ class _ChannelStream:
         return None
 
     async def _pump_loop(self) -> None:
+        """Station -> decoder -> the queue feeding ffmpeg."""
         decoder = HikStreamDecoder(self._cam.channel)
         empty = 0
         try:
@@ -230,11 +287,10 @@ class _ChannelStream:
                 if not h:
                     continue
                 rap = self._scan(h)
-                for q in list(self._subs):
-                    if q.full():
-                        self._resync(q)
-                    with contextlib.suppress(asyncio.QueueFull):
-                        q.put_nowait((rap, h))
+                if self._queue.full():
+                    self._resync(self._queue)
+                with contextlib.suppress(asyncio.QueueFull):
+                    self._queue.put_nowait((rap, h))
         except asyncio.CancelledError:
             raise
         except Exception as err:  # noqa: BLE001
@@ -242,17 +298,58 @@ class _ChannelStream:
                 "CPD7 pump %s ch%d ended: %s", self._cam.serial, self._cam.channel, err
             )
         finally:
-            for q in list(self._subs):
-                with contextlib.suppress(asyncio.QueueFull):
-                    q.put_nowait(None)  # signal EOF so viewers close
+            with contextlib.suppress(asyncio.QueueFull):
+                self._queue.put_nowait(None)
+
+    async def _feed_loop(self) -> None:
+        """The queue -> ffmpeg's stdin."""
+        try:
+            while True:
+                item = await self._queue.get()
+                if item is None:  # upstream ended
+                    break
+                self._proc.stdin.write(item[1])
+                await self._proc.stdin.drain()
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+            pass
+        finally:
+            with contextlib.suppress(Exception):
+                self._proc.stdin.close()
+
+    async def _read_loop(self) -> None:
+        """ffmpeg's stdout -> the newest published JPEG.
+
+        ``image2pipe`` writes complete JPEGs back to back.  0xFF bytes inside
+        entropy-coded data are stuffed as ``FF 00``, so ``FF D9`` only ever
+        appears as a real end-of-image marker and splitting on it is safe.
+        """
+        buf = bytearray()
+        while True:
+            chunk = await self._proc.stdout.read(64 * 1024)
+            if not chunk:
+                return
+            buf.extend(chunk)
+            while True:
+                idx = buf.find(_EOI)
+                if idx < 0:
+                    break
+                end = idx + len(_EOI)
+                self._publish(bytes(buf[:end]))
+                del buf[:end]
 
     async def _teardown(self) -> None:
         self._stopping = True
-        if self._pump is not None:
-            self._pump.cancel()
+        for task in self._tasks:
+            task.cancel()
+        for task in self._tasks:
             with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._pump
-            self._pump = None
+                await task
+        self._tasks = []
+        if self._proc is not None:
+            with contextlib.suppress(Exception):
+                self._proc.kill()
+            self._proc = None
+        self._queue = None
         if self._lan is not None:
             with contextlib.suppress(Exception):
                 await self._hass.async_add_executor_job(self._lan.close)
@@ -276,11 +373,11 @@ class _ChannelStream:
         return rap
 
     def _resync(self, q: asyncio.Queue) -> None:
-        """Restart a saturated viewer at the newest keyframe.
+        """Restart a saturated encoder feed at the newest keyframe.
 
         Evicting single chunks would punch a hole into the middle of a GOP, so
         ffmpeg decodes garbage until the next IDR.  Dropping whole GOPs instead
-        costs the viewer a jump forward and nothing else.
+        costs a jump forward and nothing else.
         """
         items = []
         while not q.empty():
@@ -290,60 +387,12 @@ class _ChannelStream:
             if items[i][0]:
                 keep = items[i:]
                 break
-        if len(keep) >= _SUB_QUEUE_MAX - 1:  # no room won back — drop the lot
+        if len(keep) >= _FEED_QUEUE_MAX - 1:  # no room won back — drop the lot
             keep = []
         if keep and self._sps and self._pps:
             q.put_nowait((False, self._sps + self._pps))
         for item in keep:
             q.put_nowait(item)
-
-
-class _MjpegRelay:
-    """Serve ffmpeg's mpjpeg output, skipping frames a slow viewer can't keep up with.
-
-    Piping ffmpeg straight at the client makes the chain a strict FIFO: a viewer
-    consuming below realtime never catches up, so every stale frame still has to
-    go out and the picture falls further behind for the life of the session.
-    Holding only the newest complete part bounds that to one frame.
-    """
-
-    def __init__(self) -> None:
-        self._latest: bytes | None = None
-        self._ready = asyncio.Event()
-        self._eof = False
-
-    async def read(self, stdout: asyncio.StreamReader) -> None:
-        buf = bytearray()
-        sep = b"--" + _MJPEG_BOUNDARY.encode()
-        while True:
-            chunk = await stdout.read(64 * 1024)
-            if not chunk:
-                self._eof = True
-                self._ready.set()
-                return
-            buf.extend(chunk)
-            idx = buf.rfind(sep)
-            if idx <= 0:
-                continue
-            prev = buf.rfind(sep, 0, idx)
-            if prev < 0:
-                continue
-            self._latest = bytes(buf[prev:idx])
-            del buf[:idx]
-            self._ready.set()
-
-    async def write(self, response: web.StreamResponse) -> None:
-        while True:
-            await self._ready.wait()
-            self._ready.clear()
-            frame, self._latest = self._latest, None
-            if frame:
-                try:
-                    await response.write(frame)
-                except (ConnectionResetError, ConnectionAbortedError):
-                    return
-            if self._eof and self._latest is None:
-                return
 
 
 class HikLocalCamera(Camera):
@@ -368,8 +417,7 @@ class HikLocalCamera(Camera):
         self._source = _ChannelStream(
             hass, client, cam, sem, quality, self._qkey, status
         )
-        self._jpeg: bytes | None = None
-        self._jpeg_ts = 0.0
+        self._last: bytes | None = None
         self._attr_name = cam.name
         self._attr_unique_id = f"{DOMAIN}_{cam.serial}_ch{cam.channel}"
 
@@ -377,78 +425,27 @@ class HikLocalCamera(Camera):
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(identifiers={(DOMAIN, self._cam.serial)})
 
-    # -- stream plumbing --------------------------------------------------
-    def _ffmpeg(self) -> str:
-        return get_ffmpeg_manager(self.hass).binary
-
-    async def _feed(self, q: asyncio.Queue, writer) -> None:
-        """Pump shared H.264 from the subscription queue into an ffmpeg stdin."""
-        try:
-            while True:
-                item = await q.get()
-                if item is None:  # upstream ended
-                    break
-                writer.write(item[1])
-                await writer.drain()
-        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
-            pass
-        finally:
-            with contextlib.suppress(Exception):
-                writer.close()
-
-    async def _cleanup(self, feed: asyncio.Task, q: asyncio.Queue, proc) -> None:
-        feed.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await feed
-        with contextlib.suppress(Exception):
-            proc.kill()
-        await self._source.unsubscribe(q)
-
     # -- snapshot ---------------------------------------------------------
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        now = time.monotonic()
-        if self._jpeg and now - self._jpeg_ts < _SNAPSHOT_TTL:
-            return self._jpeg
-        q = await self._source.subscribe()
-        if q is None:
-            return self._jpeg
-        proc = await asyncio.create_subprocess_exec(
-            self._ffmpeg(), "-loglevel", "error",
-            "-fflags", "+discardcorrupt", "-f", "h264", "-i", "pipe:0",
-            "-frames:v", "1", "-f", "image2", "-c:v", "mjpeg", "pipe:1",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        feed = asyncio.create_task(self._feed(q, proc.stdin))
+        """The newest frame from the shared encoder — no process of its own."""
+        if not await self._source.acquire():
+            return self._last
         try:
-            jpeg = await asyncio.wait_for(proc.stdout.read(), timeout=12)
-        except (TimeoutError, asyncio.TimeoutError):
-            jpeg = b""
+            got = self._source.latest
+            if got is None:
+                got = await self._source.frame_after(0, _FIRST_FRAME_TIMEOUT)
+            if got is not None:
+                self._last = got[1]
         finally:
-            await self._cleanup(feed, q, proc)
-        if jpeg:
-            self._jpeg, self._jpeg_ts = jpeg, time.monotonic()
-        return jpeg or self._jpeg
+            await self._source.release()
+        return self._last
 
     # -- live MJPEG -------------------------------------------------------
     async def handle_async_mjpeg_stream(self, request: web.Request) -> web.StreamResponse:
-        q = await self._source.subscribe()
-        if q is None:
+        if not await self._source.acquire():
             return web.Response(status=503, text="no live feed")
-        proc = await asyncio.create_subprocess_exec(
-            self._ffmpeg(), "-loglevel", "warning",
-            "-fflags", "+discardcorrupt", "-f", "h264", "-i", "pipe:0",
-            "-an", "-c:v", "mjpeg", "-q:v", str(MJPEG_QUALITY), "-r", str(MJPEG_FPS),
-            "-vf", f"scale={MJPEG_WIDTH}:{MJPEG_HEIGHT}",
-            "-f", "mpjpeg", "-boundary_tag", _MJPEG_BOUNDARY, "pipe:1",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        feed = asyncio.create_task(self._feed(q, proc.stdin))
         response = web.StreamResponse(
             status=200,
             headers={
@@ -457,15 +454,22 @@ class HikLocalCamera(Camera):
             },
         )
         await response.prepare(request)
-        relay = _MjpegRelay()
-        reader = asyncio.create_task(relay.read(proc.stdout))
+        seq = 0
         try:
-            await relay.write(response)
+            while True:
+                got = await self._source.frame_after(seq, _FRAME_TIMEOUT)
+                if got is None:
+                    break
+                seq, jpeg = got
+                self._last = jpeg
+                await response.write(
+                    b"--" + _MJPEG_BOUNDARY.encode() + b"\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
+                    + jpeg + b"\r\n"
+                )
         except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError):
             pass
         finally:
-            reader.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await reader
-            await self._cleanup(feed, q, proc)
+            await self._source.release()
         return response
