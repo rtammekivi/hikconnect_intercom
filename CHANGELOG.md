@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.2...v0.10.3) (2026-08-07)
+
+
+### Performance Improvements
+
+* **camera:** share one ffmpeg encoder per channel ([fb17f42](https://github.com/rtammekivi/hikconnect_intercom/commit/fb17f42df48a6536f7bd260a2a5dd4019a34cd04))
+
 ## [0.10.2](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.1...v0.10.2) (2026-08-07)
 
 
