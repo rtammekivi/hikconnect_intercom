@@ -36,6 +36,7 @@ from .lib.lan_client import ControlKeyError, Cpd7LanClient
 _LOGGER = logging.getLogger(__name__)
 
 _SC = b"\x00\x00\x00\x01"     # H.264 Annex-B start code
+_MJPEG_BOUNDARY = "ffmpeg"
 _MAX_EMPTY_READS = 3
 _SNAPSHOT_TTL = 10.0          # reuse a recent still instead of re-opening a stream
 _MAX_STREAMS_PER_DEVICE = 2   # concurrent *upstreams* (channels), not viewers
@@ -104,7 +105,7 @@ class _ChannelStream:
                 return None
             q: asyncio.Queue = asyncio.Queue(maxsize=_SUB_QUEUE_MAX)
             if self._sps and self._pps:  # prime late joiners with SPS/PPS
-                q.put_nowait(self._sps + self._pps)
+                q.put_nowait((False, self._sps + self._pps))
             self._subs.add(q)
             return q
 
@@ -163,7 +164,7 @@ class _ChannelStream:
                     self._key.encode("ascii"),
                     channel=self._cam.channel,
                     encrypt_stream=True,
-                    stream_type=self._quality.get(self._qkey, "MAIN"),
+                    stream_quality=self._quality.get(self._qkey, "MAIN"),
                 )
                 await self._hass.async_add_executor_job(c.start)
                 return c
@@ -203,13 +204,12 @@ class _ChannelStream:
                 h = decoder.take()
                 if not h:
                     continue
-                self._remember_params(h)
+                rap = self._scan(h)
                 for q in list(self._subs):
-                    if q.full():  # slow viewer: drop oldest to bound latency
-                        with contextlib.suppress(asyncio.QueueEmpty):
-                            q.get_nowait()
+                    if q.full():
+                        self._resync(q)
                     with contextlib.suppress(asyncio.QueueFull):
-                        q.put_nowait(h)
+                        q.put_nowait((rap, h))
         except asyncio.CancelledError:
             raise
         except Exception as err:  # noqa: BLE001
@@ -234,16 +234,91 @@ class _ChannelStream:
             self._lan = None
             self._sem.release()
 
-    def _remember_params(self, h: bytes) -> None:
-        """Cache the latest SPS/PPS so a late joiner's ffmpeg can start decoding."""
+    def _scan(self, h: bytes) -> bool:
+        """Cache the latest SPS/PPS; report whether this chunk opens a new GOP."""
+        rap = False
         for seg in h.split(_SC)[1:]:
             if not seg:
                 continue
             t = seg[0] & 0x1F
             if t == 7:
                 self._sps = _SC + seg
+                rap = True
             elif t == 8:
                 self._pps = _SC + seg
+            elif t == 5:
+                rap = True
+        return rap
+
+    def _resync(self, q: asyncio.Queue) -> None:
+        """Restart a saturated viewer at the newest keyframe.
+
+        Evicting single chunks would punch a hole into the middle of a GOP, so
+        ffmpeg decodes garbage until the next IDR.  Dropping whole GOPs instead
+        costs the viewer a jump forward and nothing else.
+        """
+        items = []
+        while not q.empty():
+            items.append(q.get_nowait())
+        keep: list = []
+        for i in range(len(items) - 1, 0, -1):
+            if items[i][0]:
+                keep = items[i:]
+                break
+        if len(keep) >= _SUB_QUEUE_MAX - 1:  # no room won back — drop the lot
+            keep = []
+        if keep and self._sps and self._pps:
+            q.put_nowait((False, self._sps + self._pps))
+        for item in keep:
+            q.put_nowait(item)
+
+
+class _MjpegRelay:
+    """Serve ffmpeg's mpjpeg output, skipping frames a slow viewer can't keep up with.
+
+    Piping ffmpeg straight at the client makes the chain a strict FIFO: a viewer
+    consuming below realtime never catches up, so every stale frame still has to
+    go out and the picture falls further behind for the life of the session.
+    Holding only the newest complete part bounds that to one frame.
+    """
+
+    def __init__(self) -> None:
+        self._latest: bytes | None = None
+        self._ready = asyncio.Event()
+        self._eof = False
+
+    async def read(self, stdout: asyncio.StreamReader) -> None:
+        buf = bytearray()
+        sep = b"--" + _MJPEG_BOUNDARY.encode()
+        while True:
+            chunk = await stdout.read(64 * 1024)
+            if not chunk:
+                self._eof = True
+                self._ready.set()
+                return
+            buf.extend(chunk)
+            idx = buf.rfind(sep)
+            if idx <= 0:
+                continue
+            prev = buf.rfind(sep, 0, idx)
+            if prev < 0:
+                continue
+            self._latest = bytes(buf[prev:idx])
+            del buf[:idx]
+            self._ready.set()
+
+    async def write(self, response: web.StreamResponse) -> None:
+        while True:
+            await self._ready.wait()
+            self._ready.clear()
+            frame, self._latest = self._latest, None
+            if frame:
+                try:
+                    await response.write(frame)
+                except (ConnectionResetError, ConnectionAbortedError):
+                    return
+            if self._eof and self._latest is None:
+                return
 
 
 class HikLocalCamera(Camera):
@@ -282,10 +357,10 @@ class HikLocalCamera(Camera):
         """Pump shared H.264 from the subscription queue into an ffmpeg stdin."""
         try:
             while True:
-                h = await q.get()
-                if h is None:  # upstream ended
+                item = await q.get()
+                if item is None:  # upstream ended
                     break
-                writer.write(h)
+                writer.write(item[1])
                 await writer.drain()
         except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
             pass
@@ -339,7 +414,8 @@ class HikLocalCamera(Camera):
             self._ffmpeg(), "-loglevel", "warning",
             "-fflags", "+discardcorrupt", "-f", "h264", "-i", "pipe:0",
             "-an", "-c:v", "mjpeg", "-q:v", str(MJPEG_QUALITY), "-r", str(MJPEG_FPS),
-            "-vf", f"scale={MJPEG_WIDTH}:{MJPEG_HEIGHT}", "-f", "mpjpeg", "pipe:1",
+            "-vf", f"scale={MJPEG_WIDTH}:{MJPEG_HEIGHT}",
+            "-f", "mpjpeg", "-boundary_tag", _MJPEG_BOUNDARY, "pipe:1",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
@@ -347,17 +423,21 @@ class HikLocalCamera(Camera):
         feed = asyncio.create_task(self._feed(q, proc.stdin))
         response = web.StreamResponse(
             status=200,
-            headers={"Content-Type": "multipart/x-mixed-replace; boundary=ffmpeg"},
+            headers={
+                "Content-Type":
+                    f"multipart/x-mixed-replace; boundary={_MJPEG_BOUNDARY}"
+            },
         )
         await response.prepare(request)
+        relay = _MjpegRelay()
+        reader = asyncio.create_task(relay.read(proc.stdout))
         try:
-            while True:
-                chunk = await proc.stdout.read(64 * 1024)
-                if not chunk:
-                    break
-                await response.write(chunk)
+            await relay.write(response)
         except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError):
             pass
         finally:
+            reader.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await reader
             await self._cleanup(feed, q, proc)
         return response

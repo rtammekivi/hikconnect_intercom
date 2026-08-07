@@ -149,11 +149,14 @@ def _xml_invite(
     receiver_addr: str,
     receiver_port: int,
     pubkey_b64: str,
-    stream_type: str = "MAIN",
+    stream_quality: str = "main",
 ) -> bytes:
     enc_str = "TRUE" if encrypt_stream else "FALSE"
-    stream_type = "SUB" if stream_type.upper() == "SUB" else "MAIN"
-    new_stream_type = "2" if stream_type == "SUB" else "1"
+    # Hikvision/EZVIZ convention: MAIN=1 (full res), SUB=2 (low-res
+    # substream). Requesting SUB cuts decode cost on weak hosts (#44).
+    sub = str(stream_quality).lower() == "sub"
+    stream_type = "SUB" if sub else "MAIN"
+    new_stream_type = 2 if sub else 1
     timestamp = int(time.time() * 1000)
     uid = str(uuid.uuid4())
     pubkey_xml = f"\n\t<PublicKey>{pubkey_b64}</PublicKey>" if pubkey_b64 else ""
@@ -163,7 +166,8 @@ def _xml_invite(
         f"\t<OperationCode>{PLACEHOLDER_OP_CODE}</OperationCode>\n"
         f'\t<Channel RelatedDevice="{related_device}">{channel}</Channel>\n'
         f'\t<ReceiverInfo Address="" Port="{receiver_port}" '
-        f'ServerType="1" StreamType="{stream_type}" NewStreamType="{new_stream_type}" TransProto="TCP" />\n'
+        f'ServerType="1" StreamType="{stream_type}" '
+        f'NewStreamType="{new_stream_type}" TransProto="TCP" />\n'
         f"\t<IsEncrypt>{enc_str}</IsEncrypt>\n"
         f'\t<ReceiverInfoEx SessionID="" Port="{receiver_port}" />\n'
         f'\t<Authentication Ticket="" BizCode="biz=1" Interval="180" />\n'
@@ -209,9 +213,9 @@ class Cpd7LanClient:
         related_device: str,
         aes_key: bytes,
         channel: int = 1,
+        stream_quality: str = "main",
         rx_port: int = DEFAULT_RX_PORT,
         encrypt_stream: bool = True,
-        stream_type: str = "MAIN",
         connect_timeout: float = 5.0,
         recv_timeout: float = 8.0,
         cmd_timeout: float = 8.0,
@@ -223,10 +227,11 @@ class Cpd7LanClient:
         self._host = host
         self._related = related_device
         self._channel = channel
+        # "main" (full res) or "sub" (low-res substream, cheaper to decode).
+        self._stream_quality = stream_quality
         self._aes_key = aes_key
         self._rx_port = rx_port
         self._encrypt_stream = encrypt_stream
-        self._stream_type = stream_type
         self._connect_timeout = connect_timeout
         self._recv_timeout = recv_timeout
         self._cmd_timeout = cmd_timeout
@@ -291,8 +296,8 @@ class Cpd7LanClient:
                 encrypt_stream=self._encrypt_stream,
                 receiver_addr=my_ip,
                 receiver_port=self._rx_port,
+                stream_quality=self._stream_quality,
                 pubkey_b64=self._ecdh_pub_b64 or "",
-                stream_type=self._stream_type,
             )
             _, resp_plain = self._send_cmd(
                 sock_inv, 1, CMD_INVITE, invite_xml, "INVITE"
