@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.5](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.4...v0.10.5) (2026-08-23)
+
+
+### Bug Fixes
+
+* **api:** stop the cloud rate-limiting itself out of a session ([f8f8457](https://github.com/rtammekivi/hikconnect_intercom/commit/f8f8457525606dc68d78aa3dfa4ec988f86f906c))
+* **api:** stop the cloud rate-limiting itself out of a session ([788c3ca](https://github.com/rtammekivi/hikconnect_intercom/commit/788c3ca999b25ab6fd3a1d092f3e91ba6ba25b2c))
+
 ## [0.10.4](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.3...v0.10.4) (2026-08-07)
 
 
