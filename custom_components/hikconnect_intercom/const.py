@@ -43,7 +43,6 @@ CALL_STATES = ["idle", "ringing", "call in progress"]  # "unknown" -> None (rese
 # so we never have to guess which opaque alert code means "incoming call".
 MQTT_APP_KEY = "4c6b3cc2-b5eb-4813-a592-612c1374c1fe"
 MQTT_APP_SECRET = "17454517-cc1c-42b3-a845-99b4a15dd3e6"
-PUSH_FEATURE_CODE = FEATURE_CODE = "deadbeefdeadbeef"
 
 
 def call_signal(serial: str) -> str:

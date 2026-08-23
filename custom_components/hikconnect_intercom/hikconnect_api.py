@@ -16,6 +16,7 @@ import re
 import threading
 from datetime import datetime
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import Any
 
 import requests
@@ -28,9 +29,19 @@ except ImportError:  # standalone / CLI use
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_BASE = "https://api.hik-connect.com"
-FEATURE_CODE = "deadbeefdeadbeef"
-_HEADERS = {"clientType": "55", "lang": "en-US", "featureCode": FEATURE_CODE}
+_HEADERS = {"clientType": "55", "lang": "en-US"}
 _CALL_STATUS = {1: "idle", 2: "ringing", 3: "call in progress"}
+_RELOGIN_MIN_INTERVAL = 30.0
+_RELOGIN_MAX_INTERVAL = 900.0
+
+
+def feature_code(account: str) -> str:
+    """Per-install terminal id, derived so it stays stable across restarts.
+
+    The cloud's rate limiter buckets on this value, so a shared literal lets any
+    one install's login storm lock out every other install of this integration.
+    """
+    return hashlib.md5(f"hikconnect_intercom:{account}".encode("utf-8")).hexdigest()[:16]
 
 
 def _csv_first_int(value: str | None) -> int | None:
@@ -70,6 +81,10 @@ class HikConnectAuthError(HikConnectError):
     """Login failed, or the session expired and could not be renewed."""
 
 
+class HikConnectRateLimited(HikConnectError):
+    """The cloud is refusing calls for this account with a 429."""
+
+
 class HikConnectClient:
     """Minimal Hik-Connect cloud client feeding the CPD7 local stream."""
 
@@ -77,12 +92,16 @@ class HikConnectClient:
         self._account = account
         self._password = password
         self._base = base_url.rstrip("/")
+        self._feature_code = feature_code(account)
         self._session = requests.Session()
         self._session.headers.update(_HEADERS)
+        self._session.headers["featureCode"] = self._feature_code
         self._session_id: str | None = None
         self._username: str | None = None
         self._sysconf: list[str] = []
         self._auth_lock = threading.Lock()
+        self._last_login = float("-inf")
+        self._login_backoff = 0.0
 
     # -- auth -------------------------------------------------------------
     def login(self) -> None:
@@ -91,10 +110,10 @@ class HikConnectClient:
             "password": hashlib.md5(self._password.encode("utf-8")).hexdigest(),
         }
         r = self._raw("POST", "/v3/users/login/v2", data)
-        if r["meta"]["code"] == 1100:  # region redirect
+        if self._meta_code(r) == 1100:  # region redirect
             self._base = "https://" + r["loginArea"]["apiDomain"]
             r = self._raw("POST", "/v3/users/login/v2", data)
-        code = r["meta"]["code"]
+        code = self._meta_code(r)
         if code in (1013, 1014):
             raise HikConnectAuthError("bad username/password")
         if code == 1015:
@@ -109,12 +128,32 @@ class HikConnectClient:
         _LOGGER.debug("Hik-Connect login ok user=%s base=%s", self._username, self._base)
 
     def _relogin(self, stale_session_id: str | None) -> None:
-        """Re-authenticate once, even if several threads notice the 401 together."""
+        """Re-authenticate once, even if several threads notice the 401 together.
+
+        Held off between attempts: the cloud answers a login storm with a 429 that
+        outlives the storm itself.
+        """
         with self._auth_lock:
             if self._session_id != stale_session_id:
                 return  # another thread already refreshed it
+            held_off = max(_RELOGIN_MIN_INTERVAL, self._login_backoff) - (
+                monotonic() - self._last_login
+            )
+            if held_off > 0:
+                raise HikConnectError(
+                    f"session expired; re-login held off for another {held_off:.0f}s"
+                )
             _LOGGER.warning("Hik-Connect session expired — re-authenticating")
-            self.login()
+            self._last_login = monotonic()
+            try:
+                self.login()
+            except Exception:
+                self._login_backoff = min(
+                    max(self._login_backoff * 2, _RELOGIN_MIN_INTERVAL),
+                    _RELOGIN_MAX_INTERVAL,
+                )
+                raise
+            self._login_backoff = 0.0
 
     # -- devices ----------------------------------------------------------
     def get_devices(self) -> list[HikDevice]:
@@ -186,7 +225,7 @@ class HikConnectClient:
             "rf_session_id": None,
             "username": self._username,
             "api_url": self._base.replace("https://", ""),
-            "feature_code": FEATURE_CODE,
+            "feature_code": self._feature_code,
             "service_urls": {"sysConf": self._sysconf},
         }
 
@@ -448,12 +487,30 @@ class HikConnectClient:
             or str(payload.get("resultCode")) == "-3"  # ISAPI passthrough
         )
 
-    def _raw(self, method: str, path: str, data: dict | None = None) -> dict:
-        r = self._session.request(method, f"{self._base}{path}", data=data, timeout=25)
+    @staticmethod
+    def _meta_code(payload: dict) -> int:
+        meta = payload.get("meta")
+        if not isinstance(meta, dict) or "code" not in meta:
+            raise HikConnectError(f"login: unexpected reply {json.dumps(payload)[:200]}")
+        return meta["code"]
+
+    @staticmethod
+    def _json(r: requests.Response, method: str, path: str) -> dict:
+        """Parse a reply, turning a cloud rate-limit into a typed error."""
         try:
-            return r.json()
+            payload = r.json()
         except ValueError as err:
             raise HikConnectError(f"{method} {path}: non-JSON reply ({r.status_code})") from err
+        if r.status_code == 429 or payload.get("code") == 429:
+            raise HikConnectRateLimited(
+                f"{method} {path}: rate-limited by the cloud "
+                f"({payload.get('message') or r.status_code})"
+            )
+        return payload
+
+    def _raw(self, method: str, path: str, data: dict | None = None) -> dict:
+        r = self._session.request(method, f"{self._base}{path}", data=data, timeout=25)
+        return self._json(r, method, path)
 
     def _call(self, method: str, path: str, data_factory=None) -> dict:
         """Request, transparently re-authenticating once if the session has expired.
@@ -466,12 +523,7 @@ class HikConnectClient:
         for attempt in (1, 2):
             data = data_factory() if data_factory else None
             r = self._session.request(method, f"{self._base}{path}", data=data, timeout=25)
-            try:
-                payload = r.json()
-            except ValueError as err:
-                raise HikConnectError(
-                    f"{method} {path}: non-JSON reply ({r.status_code})"
-                ) from err
+            payload = self._json(r, method, path)
             if not self._unauthorized(r.status_code, payload):
                 return payload
             if attempt == 2:
