@@ -11,9 +11,9 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from .const import (
     MQTT_APP_KEY,
     MQTT_APP_SECRET,
-    PUSH_FEATURE_CODE,
     call_signal,
 )
+from .hikconnect_api import HikConnectError, feature_code
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ class HikConnectPush:
         self._base_url = base_url
         self._account = account
         self._password = password
+        self._feature_code = feature_code(account)
         self._client = None
 
     async def async_start(self) -> None:
@@ -56,20 +57,22 @@ class HikConnectPush:
             "account": self._account,
             "password": hashlib.md5(self._password.encode("utf-8")).hexdigest(),
         }
-        headers = {"clientType": "55", "lang": "en-US", "featureCode": PUSH_FEATURE_CODE}
+        headers = {"clientType": "55", "lang": "en-US", "featureCode": self._feature_code}
         base = self._base_url
         async with session.post(f"{base}/v3/users/login/v2", data=data, headers=headers) as r:
             j = await r.json()
-        if j["meta"]["code"] == 1100:
+        if (j.get("meta") or {}).get("code") == 1100:
             base = f"https://{j['loginArea']['apiDomain']}"
             async with session.post(f"{base}/v3/users/login/v2", data=data, headers=headers) as r:
                 j = await r.json()
+        if "loginSession" not in j:
+            raise HikConnectError(f"push login failed: {json.dumps(j)[:200]}")
         return base, j["loginSession"]["sessionId"], j["loginUser"]["username"]
 
     async def _get_push_addr(self, session, base, session_id):
         headers = {
             "clientType": "55", "lang": "en-US",
-            "featureCode": PUSH_FEATURE_CODE, "sessionId": session_id,
+            "featureCode": self._feature_code, "sessionId": session_id,
         }
         async with session.get(f"{base}/v3/configurations/system/info", headers=headers) as r:
             j = await r.json()
@@ -80,7 +83,7 @@ class HikConnectPush:
             f"{MQTT_APP_KEY}:{MQTT_APP_SECRET}".encode("ascii")
         ).decode()
         data = {
-            "appKey": MQTT_APP_KEY, "clientType": "5", "mac": PUSH_FEATURE_CODE,
+            "appKey": MQTT_APP_KEY, "clientType": "5", "mac": self._feature_code,
             "token": "123456", "version": "v1.3.0",
         }
         async with session.post(

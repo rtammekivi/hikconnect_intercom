@@ -93,7 +93,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     def _status_work() -> dict[str, dict]:
-        status = client.get_device_status_map()
+        try:
+            status = client.get_device_status_map()
+        except HikConnectError as err:
+            raise UpdateFailed(f"status poll failed: {err}") from err
         missing = [d.serial for d in devices if d.serial not in status]
         if missing:
             # The cloud answers an expired session with a well-formed 401 and an
