@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.6](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.5...v0.10.6) (2026-09-11)
+
+
+### Bug Fixes
+
+* **cas:** anchor the legacy CAS certificate chain so non-EU regions work ([728b119](https://github.com/rtammekivi/hikconnect_intercom/commit/728b11972a9614fe65614ff00d643a88586908c3))
+* **cas:** anchor the legacy CAS certificate chain so non-EU regions work ([081f58f](https://github.com/rtammekivi/hikconnect_intercom/commit/081f58fe8aeff543c4546807150d2afb4b84a8d8)), closes [#9](https://github.com/rtammekivi/hikconnect_intercom/issues/9)
+
 ## [0.10.5](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.4...v0.10.5) (2026-08-23)
 
 
