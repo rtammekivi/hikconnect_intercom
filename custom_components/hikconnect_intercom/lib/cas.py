@@ -8,6 +8,7 @@ from io import BytesIO
 import ipaddress
 from itertools import cycle
 import logging
+from pathlib import Path
 import random
 import socket
 import ssl
@@ -40,6 +41,7 @@ CAS_TLS_CIPHERS = (
     "DEFAULT:!aNULL:!eNULL:!MD5:!3DES:!DES:!RC4:!IDEA:!SEED:!aDSS:!SRP:!PSK"
 )
 CAS_CERT_HAS_EXPIRED_VERIFY_CODE = 10
+CAS_CA_BUNDLE = Path(__file__).with_name("cas_ca_bundle.pem")
 
 
 @dataclass(frozen=True)
@@ -115,6 +117,7 @@ def _cas_tls_context(*, verify_certificate: bool = True) -> ssl.SSLContext:
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.set_ciphers(CAS_TLS_CIPHERS)
+    context.load_verify_locations(cafile=str(CAS_CA_BUNDLE))
     if not verify_certificate:
         # EZVIZ app clients tolerate expired CAS WebPKI certificates. Python's
         # SSL layer cannot ignore only expiry, so this context is used only after
@@ -496,7 +499,7 @@ class EzvizCAS:
         except (socket.gaierror, ConnectionRefusedError) as err:
             raise InvalidHost("Invalid IP or Hostname") from err
         except ssl.SSLError as err:
-            raise PyEzvizError("CAS TLS handshake failed") from err
+            raise PyEzvizError(f"CAS TLS handshake failed: {err}") from err
         finally:
             if sock is not None:
                 sock.close()

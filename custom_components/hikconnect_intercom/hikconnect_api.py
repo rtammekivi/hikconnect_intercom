@@ -244,7 +244,12 @@ class HikConnectClient:
                 if attempt == 2:
                     raise HikConnectError(f"CAS key fetch failed for {serial}: {err}") from err
                 _LOGGER.debug("CAS key fetch failed (%s) — re-authenticating", err)
-                self._relogin(self._session_id)
+                try:
+                    self._relogin(self._session_id)
+                except HikConnectError as relogin_err:
+                    raise HikConnectError(
+                        f"CAS key fetch failed for {serial}: {err}"
+                    ) from relogin_err
         raise AssertionError("unreachable")
 
     # -- call / door controls (cloud) -------------------------------------
