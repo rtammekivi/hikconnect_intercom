@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.7](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.6...v0.10.7) (2026-10-01)
+
+
+### Bug Fixes
+
+* **manifest:** drop cryptography and requests requirements provided by Home Assistant core ([ca382e4](https://github.com/rtammekivi/hikconnect_intercom/commit/ca382e4f71fd3a7f23777d7c9886af1fe435857c))
+* **manifest:** drop cryptography and requests requirements provided by Home Assistant core ([b90454d](https://github.com/rtammekivi/hikconnect_intercom/commit/b90454d99702203cc566980b27da91ac08531ba4))
+
 ## [0.10.6](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.5...v0.10.6) (2026-09-11)
 
 
