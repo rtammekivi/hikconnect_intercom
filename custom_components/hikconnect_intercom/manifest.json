@@ -17,8 +17,6 @@
   ],
   "requirements": [
     "pycryptodome",
-    "cryptography",
-    "requests",
     "xmltodict",
     "paho-mqtt>=1.6.1"
   ],
