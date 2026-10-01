@@ -8,16 +8,16 @@ station connection and one encoder, not N.
 
 Pipeline (all local, no cloud/phone/frida):
   Cpd7LanClient (9010/9020, AES-128 control key from CAS, per-channel)
-    -> HikStreamDecoder (strip $01 framing + 12B RTP + 13B Hik header -> H.264)
-    -> shared ffmpeg (H.264 -> JPEG) -> newest frame -> browsers / snapshots.
+    -> HikStreamDecoder (nested RTP depacketization + optional AES -> H.264/H.265)
+    -> shared ffmpeg (H.264/H.265 -> JPEG) -> newest frame -> browsers / snapshots.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-
 import logging
+import time
 
 from aiohttp import web
 from homeassistant.components.camera import Camera
@@ -40,7 +40,8 @@ _MJPEG_BOUNDARY = "frame"
 _MAX_EMPTY_READS = 3
 _MAX_STREAMS_PER_DEVICE = 2   # concurrent *upstreams* (channels), not viewers
 _ACQUIRE_TIMEOUT = 6.0
-_LINGER_SEC = 10.0            # keep the pipeline warm so reopening is instant
+_LIVE_ACQUIRE_TIMEOUT = 25.0  # allow in-flight previews to finish before live video
+_LINGER_SEC = 1.0             # return scarce slots before snapshot acquire times out
 _FEED_QUEUE_MAX = 240         # bounded backlog into ffmpeg; drops whole GOPs
 _FIRST_FRAME_TIMEOUT = 12.0
 _FRAME_TIMEOUT = 10.0
@@ -93,13 +94,16 @@ class _ChannelStream:
         self._jpeg: bytes | None = None
         self._seq = 0
         self._waiters: set[asyncio.Event] = set()
+        self._vps = b""
+        self._decoder: HikStreamDecoder | None = None
+        self._video_key: str | None = None
         self._sps = b""
         self._pps = b""
         self._lock = asyncio.Lock()
         self._linger: asyncio.TimerHandle | None = None
 
     # -- consumer lifecycle ----------------------------------------------
-    async def acquire(self) -> bool:
+    async def acquire(self, timeout: float = _ACQUIRE_TIMEOUT) -> bool:
         """Register a consumer, starting the pipeline if it isn't already up."""
         async with self._lock:
             if self._linger is not None:
@@ -107,7 +111,7 @@ class _ChannelStream:
                 self._linger = None
             if self._proc is not None and any(t.done() for t in self._tasks):
                 await self._teardown()  # pipeline died — rebuild it
-            if self._proc is None and not await self._open():
+            if self._proc is None and not await self._open(timeout):
                 return False
             self._users += 1
             return True
@@ -159,24 +163,49 @@ class _ChannelStream:
             ev.set()
 
     # -- pipeline lifecycle ----------------------------------------------
-    async def _open(self) -> bool:
+    async def _open(self, timeout: float = _ACQUIRE_TIMEOUT) -> bool:
         try:
-            await asyncio.wait_for(self._sem.acquire(), timeout=_ACQUIRE_TIMEOUT)
+            await asyncio.wait_for(self._sem.acquire(), timeout=timeout)
         except (TimeoutError, asyncio.TimeoutError):
             _LOGGER.warning(
                 "%s ch%d (%s): no free stream slot after %.0fs — %d upstream(s) in use",
                 self._cam.serial, self._cam.channel, self._cam.name,
-                _ACQUIRE_TIMEOUT, _MAX_STREAMS_PER_DEVICE,
+                timeout, _MAX_STREAMS_PER_DEVICE,
             )
             return False
-        lan = await self._open_lan()
+        try:
+            lan = await self._open_lan()
+        except BaseException:
+            self._sem.release()
+            raise
         if lan is None:
             self._sem.release()
             return False
         try:
+            # Discover the codec before starting ffmpeg. Keep the first packets
+            # so encrypted headers can be replayed after fetching the video key.
+            decoder = HikStreamDecoder(self._cam.channel, self._video_key)
+            initial = bytearray()
+            deadline = time.monotonic() + 8
+            while decoder.codec is None and time.monotonic() < deadline:
+                chunk = await self._hass.async_add_executor_job(lan.read_chunk)
+                initial.extend(chunk)
+                if len(initial) > 2 * 1024 * 1024:
+                    raise ValueError("Camera codec discovery exceeded buffer limit")
+                decoder.feed(chunk)
+            if decoder.codec is None:
+                raise ValueError("Camera sent no supported video headers")
+            if decoder.requires_key and self._video_key is None:
+                self._video_key = await self._hass.async_add_executor_job(
+                    self._client.get_video_key, self._cam.serial
+                )
+                decoder = HikStreamDecoder(self._cam.channel, self._video_key)
+                decoder.feed(bytes(initial))
+            self._decoder = decoder
+            initial_video = decoder.take()
             proc = await asyncio.create_subprocess_exec(
                 get_ffmpeg_manager(self._hass).binary, "-loglevel", "error",
-                "-fflags", "+discardcorrupt", "-f", "h264", "-i", "pipe:0",
+                "-fflags", "+discardcorrupt", "-f", decoder.codec, "-i", "pipe:0",
                 "-an", "-c:v", "mjpeg", "-q:v", str(MJPEG_QUALITY), "-r", str(MJPEG_FPS),
                 "-vf", f"scale={MJPEG_WIDTH}:{MJPEG_HEIGHT}",
                 "-f", "image2pipe", "pipe:1",
@@ -184,19 +213,26 @@ class _ChannelStream:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("ffmpeg failed to start for %s: %s", self._cam.name, err)
+        except (Exception, asyncio.CancelledError) as err:
+            # HA cancels snapshot requests at its timeout. Cancellation must
+            # release the slot too, or two slow/offline channels exhaust it.
+            if not isinstance(err, asyncio.CancelledError):
+                _LOGGER.warning(
+                    "video pipeline failed to start for %s: %s", self._cam.name, err
+                )
             with contextlib.suppress(Exception):
                 await self._hass.async_add_executor_job(lan.close)
             self._sem.release()
+            if isinstance(err, asyncio.CancelledError):
+                raise
             return False
         self._lan = lan
         self._proc = proc
         self._stopping = False
         self._jpeg = None
         self._queue = asyncio.Queue(maxsize=_FEED_QUEUE_MAX)
-        if self._sps and self._pps:  # let ffmpeg decode before the next IDR
-            self._queue.put_nowait((False, self._sps + self._pps))
+        if initial_video:
+            self._queue.put_nowait((self._scan(initial_video), initial_video))
         self._tasks = [
             asyncio.create_task(self._pump_loop()),
             asyncio.create_task(self._feed_loop()),
@@ -247,7 +283,21 @@ class _ChannelStream:
                     encrypt_stream=True,
                     stream_quality=self._quality.get(self._qkey, "MAIN"),
                 )
-                await self._hass.async_add_executor_job(c.start)
+                start_job = self._hass.async_add_executor_job(c.start)
+                try:
+                    await asyncio.shield(start_job)
+                except asyncio.CancelledError:
+                    # The blocking socket job continues after cancellation;
+                    # close its result when it finishes, rather than leaking it.
+                    def close_cancelled(
+                        future: asyncio.Future, client: Cpd7LanClient = c
+                    ) -> None:
+                        with contextlib.suppress(Exception):
+                            future.result()
+                        self._hass.async_add_executor_job(client.close)
+
+                    start_job.add_done_callback(close_cancelled)
+                    raise
                 return c
             except ControlKeyError as err:
                 self._key = None  # drop the stale key so the retry refetches
@@ -271,7 +321,7 @@ class _ChannelStream:
 
     async def _pump_loop(self) -> None:
         """Station -> decoder -> the queue feeding ffmpeg."""
-        decoder = HikStreamDecoder(self._cam.channel)
+        decoder = self._decoder
         empty = 0
         try:
             while not self._stopping:
@@ -362,6 +412,17 @@ class _ChannelStream:
         for seg in h.split(_SC)[1:]:
             if not seg:
                 continue
+            if self._decoder and self._decoder.codec == "hevc":
+                t = (seg[0] >> 1) & 63
+                if t == 32:
+                    self._vps = _SC + seg
+                elif t == 33:
+                    self._sps = _SC + seg
+                elif t == 34:
+                    self._pps = _SC + seg
+                if 16 <= t <= 21:
+                    rap = True
+                continue
             t = seg[0] & 0x1F
             if t == 7:
                 self._sps = _SC + seg
@@ -390,7 +451,7 @@ class _ChannelStream:
         if len(keep) >= _FEED_QUEUE_MAX - 1:  # no room won back — drop the lot
             keep = []
         if keep and self._sps and self._pps:
-            q.put_nowait((False, self._sps + self._pps))
+            q.put_nowait((False, self._vps + self._sps + self._pps))
         for item in keep:
             q.put_nowait(item)
 
@@ -444,7 +505,7 @@ class HikLocalCamera(Camera):
 
     # -- live MJPEG -------------------------------------------------------
     async def handle_async_mjpeg_stream(self, request: web.Request) -> web.StreamResponse:
-        if not await self._source.acquire():
+        if not await self._source.acquire(_LIVE_ACQUIRE_TIMEOUT):
             return web.Response(status=503, text="no live feed")
         response = web.StreamResponse(
             status=200,
@@ -453,9 +514,9 @@ class HikLocalCamera(Camera):
                     f"multipart/x-mixed-replace; boundary={_MJPEG_BOUNDARY}"
             },
         )
-        await response.prepare(request)
         seq = 0
         try:
+            await response.prepare(request)
             while True:
                 got = await self._source.frame_after(seq, _FRAME_TIMEOUT)
                 if got is None:

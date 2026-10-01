@@ -14,8 +14,9 @@ import json
 import logging
 import re
 import threading
-from datetime import datetime
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from datetime import datetime
 from time import monotonic
 from typing import Any
 
@@ -310,6 +311,17 @@ class HikConnectClient:
             }
 
         return self._call("POST", "/api/device/isapi", form)
+
+    def get_video_key(self, serial: str) -> str:
+        """Fetch the existing stream verification code; never log or persist it."""
+        response = self.isapi(serial, "GET", "/ISAPI/System/Network/EZVIZ")
+        root = ET.fromstring(response.get("data") or "")
+        for element in root.iter():
+            if element.tag.rsplit("}", 1)[-1] == "verificationCode":
+                value = (element.text or "").strip()
+                if value and not set(value) <= {"*"}:
+                    return value
+        raise HikConnectError("Recorder video verification code is unavailable")
 
     def get_audio_volumes(self, serial: str) -> dict[str, int | None]:
         """Ringtone / two-way / microphone volume (0-10) via ISAPI."""

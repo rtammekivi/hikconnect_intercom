@@ -1,0 +1,6 @@
+# Dependencies for offline tests; no Home Assistant installation is needed.
+aiohttp
+cryptography
+pycryptodome
+requests
+xmltodict

@@ -30,8 +30,9 @@ This started as a fork of
 [Bobsilvio/ezviz_hp7](https://github.com/Bobsilvio/ezviz_hp7) (the EZVIZ HP7
 CPD7 work — thank you). The CPD7 `lan_client`, ECDH/ChaCha20 `crypto`, and the
 `pylocalapi` CAS client are vendored under `custom_components/hikconnect_intercom/lib/`.
-Hik-Connect indoor stations send the local media **unencrypted** (Hikvision RTP),
-so a dedicated decoder (`lib/hik_decoder.py`) replaces the HP7 ChaCha20 path.
+Hik-Connect indoor stations send the local media **unencrypted** (Hikvision RTP).
+Supported NVRs can send **AES-encrypted H.264/H.265** instead. A dedicated decoder
+(`lib/hik_decoder.py`) handles both paths, replacing the HP7 ChaCha20 path.
 
 ## How it works
 
@@ -41,8 +42,8 @@ so a dedicated decoder (`lib/hik_decoder.py`) replaces the HP7 ChaCha20 path.
 Hik-Connect login ──► device list + LAN IP        (cloud, once)
                 └────► CAS getDevOperationCode ──► 16-byte AES control key
 Cpd7LanClient (9010 INIT/INVITE/PLAY, AES-128-CBC control) ──► 9020 stream
-   └─► HikStreamDecoder: strip $01 framing + 12B RTP + 13B Hik header ──► H.264
-        └─► ffmpeg H.264 ─► MJPEG ─► Home Assistant camera
+   └─► HikStreamDecoder: nested RTP + optional AES decryption ──► H.264/H.265
+        └─► ffmpeg ─► MJPEG ─► Home Assistant camera
 ```
 
 **Controls / config / status (cloud):** relayed through the Hik-Connect cloud with
@@ -61,6 +62,27 @@ cover DST + Do-Not-Disturb.
 
 A camera entity is created for each LAN-reachable device. Live view uses MJPEG
 (codec-agnostic, low-latency, no go2rtc required); snapshots work too.
+
+## Recorder video
+
+The local decoder also supports encrypted H.264/H.265 recorder channels, tested
+with a DS-7608NI-I2/8P alongside a DS-KH8350-WTE1 intercom. The integration retrieves
+the existing stream verification code through the account's read-only ISAPI
+passthrough (`GET /ISAPI/System/Network/EZVIZ`). It does not change encryption or
+require the recorder's local administrator password. The code stays in memory;
+it is neither logged nor saved. Accounts/devices that return a masked or missing
+verification code cannot decode an encrypted feed through this path.
+
+Codec detection selects the appropriate ffmpeg input. RTP extensions, padding,
+fragmentation, and the recorder's AES block limit are handled before decoding.
+This is support for the observed stream format, not a guarantee that every
+Hikvision recorder or firmware uses it. The EZVIZ HP7 ChaCha20 format is unchanged.
+
+A device still has a two-upstream limit. Idle pipelines release their slots after
+one second, and live requests can wait up to 25 seconds while previews finish.
+Cancellation during startup or while opening the HTTP response releases the
+connection rather than leaving a slot occupied. Two continuously active channels
+can still prevent a third channel from opening.
 
 ## Entities
 
@@ -116,3 +138,16 @@ What's new here (this project): the Hik-Connect account auth path, the unencrypt
 Hik-Connect media decoder (`lib/hik_decoder.py`), and the cloud **ISAPI passthrough**
 (`/api/device/isapi`) that drives volumes, time, and other settings. See
 `THIRD_PARTY_LICENSES.md` for the exact vendored files and their licenses.
+
+## Running the offline regression tests
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-test.txt
+.venv/bin/python -m unittest discover -s tests -t . -v
+```
+
+Tests use synthetic RTP packets and dummy verification codes. They exercise the
+actual modules with Home Assistant import interfaces and network/process
+boundaries stubbed; no account, camera, recording, or running HA server is needed.
+Hardware validation still matters for firmware-specific stream formats.
