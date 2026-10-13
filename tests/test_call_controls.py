@@ -114,6 +114,15 @@ class StationReadTests(unittest.TestCase):
         client._get.return_value = {"message": []}
         self.assertIsNone(client.get_last_ring("S1"))
 
+    def test_last_ring_retries_when_device_time_unavailable(self):
+        client = _client()
+        client._get = Mock(return_value={"message": [{"subType": 2701, "msgId": "m1", "time": 5000}]})
+        client.isapi = Mock(return_value={"data": ""})
+        self.assertIsNone(client.get_last_ring("S1"))
+        now = datetime.now(timezone.utc)
+        client.isapi.return_value = {"data": f"<localTime>{now:%Y-%m-%dT%H:%M:%S}+00:00</localTime>"}
+        self.assertAlmostEqual(client.get_last_ring("S1")["time"], 5000, delta=2000)
+
     def test_operation_time(self):
         client = _client()
         client.isapi = Mock(

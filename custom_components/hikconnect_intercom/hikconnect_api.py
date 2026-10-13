@@ -448,8 +448,11 @@ class HikConnectClient:
                 cached = self._last_rings.get(serial)
                 if cached and cached["msg_id"] == msg.get("msgId"):
                     return cached
+                skew = self._clock_skew_ms(serial)
+                if skew is None:
+                    return None
                 ring = {
-                    "time": msg["time"] - self._clock_skew_ms(serial),
+                    "time": msg["time"] - skew,
                     "msg_id": msg.get("msgId"),
                     "calling_status": (msg.get("ext") or {}).get("callingStatus"),
                 }
@@ -457,11 +460,11 @@ class HikConnectClient:
                 return ring
         return None
 
-    def _clock_skew_ms(self, serial: str) -> int:
+    def _clock_skew_ms(self, serial: str) -> int | None:
         cur = self.isapi(serial, "GET", "/ISAPI/System/time").get("data") or ""
         m = re.search(r"<localTime>(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)", cur)
         if not m:
-            return 0
+            return None
         wall = datetime.fromisoformat(m.group(1)).replace(tzinfo=timezone.utc)
         return round((wall - datetime.now(timezone.utc)).total_seconds()) * 1000
 
