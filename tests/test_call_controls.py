@@ -17,45 +17,63 @@ def _client(isapi_serials=()):
 
 
 class CallCommandTests(unittest.TestCase):
-    def test_isapi_station_uses_call_signal(self):
-        client = _client({"S1"})
-        client.isapi = Mock(return_value={"resultCode": "0", "data": '{"statusCode": 1}'})
-        client._put = Mock()
-        for method, cmd_type in (
-            ("answer_call", "answer"),
-            ("reject_call", "reject"),
-            ("hangup_call", "hangUp"),
-        ):
-            with self.subTest(method=method):
-                getattr(client, method)("S1")
-                serial, verb, path, body = client.isapi.call_args.args
-                self.assertEqual(
-                    (serial, verb, path),
-                    ("S1", "PUT", "/ISAPI/VideoIntercom/callSignal?format=json"),
-                )
-                self.assertEqual(
-                    json.loads(body),
-                    {"CallSignal": {"cmdType": cmd_type, "sessionId": "user name"}},
-                )
-        client._put.assert_not_called()
+    OK = {"meta": {"code": 200}, "data": '{"statusCode": 1}'}
+    IDLE = {
+        "meta": {"code": 200},
+        "data": '{"statusCode": "4", "subStatusCode": "invalidOperation"}',
+    }
 
-    def test_call_signal_rejection_raises(self):
+    @staticmethod
+    def _signals(call):
+        sent = []
+        for c in call.call_args_list:
+            method, path, factory = c.args
+            form = factory()
+            head, body = form["apiData"].split("\r\n", 1)
+            sent.append((method, path, form["apiKey"], form["channelNo"], head, json.loads(body)))
+        return sent
+
+    def test_isapi_station_matches_app_request(self):
         client = _client({"S1"})
-        client.isapi = Mock(
-            return_value={
-                "resultCode": "0",
-                "data": '{"statusCode": "4", "subStatusCode": "invalidOperation"}',
-            }
+        client._call = Mock(return_value=self.OK)
+        client.answer_call("S1")
+        self.assertEqual(
+            self._signals(client._call),
+            [(
+                "POST", "/v3/userdevices/v1/isapi", "100113", 1,
+                "PUT /ISAPI/VideoIntercom/callSignal?format=json",
+                {"CallSignal": {"channelID": 0, "cmdType": "answer", "sessionId": "user name"}},
+            )],
         )
-        with self.assertRaisesRegex(api.HikConnectError, "invalidOperation"):
-            client.hangup_call("S1")
+
+    def test_end_call_picks_command_from_status(self):
+        for status, first in (("ringing", "reject"), ("call in progress", "hangUp"), (None, "hangUp")):
+            with self.subTest(status=status):
+                client = _client({"S1"})
+                client._call = Mock(return_value=self.OK)
+                client.end_call("S1", status)
+                cmds = [s[5]["CallSignal"]["cmdType"] for s in self._signals(client._call)]
+                self.assertEqual(cmds, [first])
+
+    def test_end_call_falls_back_to_other_command(self):
+        client = _client({"S1"})
+        client._call = Mock(side_effect=[self.IDLE, self.OK])
+        client.end_call("S1", "call in progress")
+        cmds = [s[5]["CallSignal"]["cmdType"] for s in self._signals(client._call)]
+        self.assertEqual(cmds, ["hangUp", "reject"])
+
+    def test_end_call_reports_first_rejection(self):
+        client = _client({"S1"})
+        client._call = Mock(return_value=self.IDLE)
+        with self.assertRaisesRegex(api.HikConnectError, "hangUp rejected.*invalidOperation"):
+            client.end_call("S1")
 
     def test_legacy_station_sends_handler(self):
         client = _client()
         client._put = Mock(return_value={"meta": {"code": 200}, "data": '{"rc": 1}'})
-        client.hangup_call("S2")
+        client.end_call("S2", "ringing")
         client._put.assert_called_once_with(
-            "/v3/devconfig/v1/call/S2/operation?cmdId=5&handler=user%20name"
+            "/v3/devconfig/v1/call/S2/operation?cmdId=3&handler=user%20name"
         )
 
     def test_support_isapi_parsing(self):

@@ -89,8 +89,9 @@ can still prevent a third channel from opening.
 - **Camera** — one per real door-station channel (native local CPD7 video).
 - **Lock** — one per unlock-capable channel; opens the door latch (momentary,
   auto-relocks after a few seconds). Uses the cloud remote-unlock endpoint.
-- **Buttons** — *Answer call*, *Hang up call*, *Reject call* (cloud call ops;
-  stations that support it get the ISAPI `callSignal` command the app uses),
+- **Buttons** — *Answer call* and *Hang up call* (cloud call ops; hang up
+  rejects a ringing call and ends an answered one; stations that support it get
+  the ISAPI `callSignal` command the app uses),
   *Unlock all doors* (opens every lock-capable channel at once), and *Sync time*
   (config; sets the station clock to HA's DST-aware local time via ISAPI).
 - **Call status sensor** — `idle` / `ringing` / `call in progress`. State comes

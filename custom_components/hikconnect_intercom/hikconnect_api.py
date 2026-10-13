@@ -289,18 +289,35 @@ class HikConnectClient:
 
     def _call_signal(self, serial: str, cmd_type: str) -> dict:
         body = json.dumps(
-            {"CallSignal": {"cmdType": cmd_type, "sessionId": self._username or ""}}
+            {
+                "CallSignal": {
+                    "channelID": 0,
+                    "cmdType": cmd_type,
+                    "sessionId": self._username or "",
+                }
+            }
         )
-        r = self.isapi(serial, "PUT", "/ISAPI/VideoIntercom/callSignal?format=json", body)
+        api_data = f"PUT /ISAPI/VideoIntercom/callSignal?format=json\r\n{body}"
+        r = self._call(
+            "POST",
+            "/v3/userdevices/v1/isapi",
+            lambda: {
+                "deviceSerial": serial,
+                "channelNo": 1,
+                "apiKey": "100113",
+                "apiData": api_data,
+            },
+        )
+        meta = (r.get("meta") or {}).get("code")
         try:
             status = json.loads(r.get("data") or "{}")
         except (ValueError, TypeError):
             status = {}
         code = str(status.get("statusCode", ""))
-        if str(r.get("resultCode")) != "0" or code not in ("", "1"):
+        if meta != 200 or code not in ("", "1"):
             raise HikConnectError(
-                f"{cmd_type} rejected (resultCode={r.get('resultCode')}, "
-                f"statusCode={code}, sub={status.get('subStatusCode')})"
+                f"{cmd_type} rejected (meta={meta}, statusCode={code}, "
+                f"sub={status.get('subStatusCode')})"
             )
         return r
 
@@ -312,11 +329,19 @@ class HikConnectClient:
     def answer_call(self, serial: str) -> dict:
         return self._call_command(serial, "answer", 2)
 
-    def reject_call(self, serial: str) -> dict:
-        return self._call_command(serial, "reject", 3)
-
-    def hangup_call(self, serial: str) -> dict:
-        return self._call_command(serial, "hangUp", 5)
+    def end_call(self, serial: str, status: str | None = None) -> dict:
+        commands = [("hangUp", 5), ("reject", 3)]
+        if status == "ringing":
+            commands.reverse()
+        try:
+            return self._call_command(serial, *commands[0])
+        except HikConnectRateLimited:
+            raise
+        except HikConnectError as first:
+            try:
+                return self._call_command(serial, *commands[1])
+            except HikConnectError:
+                raise first from None
 
     def get_call_status(self, serial: str) -> dict:
         """Return {'status': idle|ringing|call in progress|unknown, 'info': {...}}."""
