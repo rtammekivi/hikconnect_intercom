@@ -361,7 +361,7 @@ class HikConnectClient:
             now = datetime.now(timezone.utc).timestamp()
             if info.get("devType", -1) == -1:
                 self._last_callers.pop(serial, None)
-            elif previous and self._in_call.get(serial):
+            elif previous and self._in_call.get(serial) and previous[2].get("devNo") == info.get("devNo"):
                 self._last_callers[serial] = (previous[0], now, info)
             else:
                 self._last_callers[serial] = (now, now, info)
