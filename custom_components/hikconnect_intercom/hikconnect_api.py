@@ -35,6 +35,7 @@ _HEADERS = {"clientType": "55", "lang": "en-US"}
 _CALL_STATUS = {1: "idle", 2: "ringing", 3: "call in progress"}
 _RELOGIN_MIN_INTERVAL = 30.0
 _RELOGIN_MAX_INTERVAL = 900.0
+_CALLER_MEMORY = 300.0
 
 
 def feature_code(account: str) -> str:
@@ -107,6 +108,7 @@ class HikConnectClient:
         self._login_backoff = 0.0
         self._isapi_call_serials: set[str] = set()
         self._last_rings: dict[str, dict] = {}
+        self._last_callers: dict[str, tuple[float, dict]] = {}
 
     # -- auth -------------------------------------------------------------
     def login(self) -> None:
@@ -351,7 +353,18 @@ class HikConnectClient:
             return {"status": "unknown", "info": {}}
         data = json.loads(r["data"])
         status = _CALL_STATUS.get(data.get("callStatus"), "unknown")
-        return {"status": status, "info": data.get("callerInfo") or {}}
+        info = data.get("callerInfo") or {}
+        if status in ("ringing", "call in progress") and info.get("devType", -1) != -1:
+            self._last_callers[serial] = (monotonic(), info)
+        return {"status": status, "info": info}
+
+    def calling_door(self, serial: str) -> int | None:
+        self.get_call_status(serial)
+        seen = self._last_callers.get(serial)
+        if seen is None or monotonic() - seen[0] > _CALLER_MEMORY:
+            return None
+        dev_no = seen[1].get("devNo")
+        return dev_no + 1 if isinstance(dev_no, int) else None
 
     # -- ISAPI over the cloud passthrough ---------------------------------
     def isapi(self, serial: str, method: str, path: str, body: str = "") -> dict:
