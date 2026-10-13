@@ -359,11 +359,17 @@ class HikConnectClient:
         return {"status": status, "info": info}
 
     def calling_door(self, serial: str) -> int | None:
-        self.get_call_status(serial)
-        seen = self._last_callers.get(serial)
-        if seen is None or monotonic() - seen[0] > _CALLER_MEMORY:
+        current = self.get_call_status(serial)
+        if current["status"] in ("ringing", "call in progress"):
+            info = current["info"] if current["info"].get("devType", -1) != -1 else {}
+        elif current["status"] == "idle":
+            seen = self._last_callers.get(serial)
+            if seen is None or monotonic() - seen[0] > _CALLER_MEMORY:
+                return None
+            info = seen[1]
+        else:
             return None
-        dev_no = seen[1].get("devNo")
+        dev_no = info.get("devNo")
         return dev_no + 1 if isinstance(dev_no, int) else None
 
     # -- ISAPI over the cloud passthrough ---------------------------------

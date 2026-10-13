@@ -182,6 +182,15 @@ class CallingDoorTests(unittest.TestCase):
         with patch.object(api, "monotonic", return_value=api.monotonic() + 301):
             self.assertIsNone(client.calling_door("S1"))
 
+    def test_unclear_status_does_not_use_previous_caller(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=0))
+        client.get_call_status("S1")
+        client._get.return_value = {"meta": {"code": 500}}
+        self.assertIsNone(client.calling_door("S1"))
+        client._get.return_value = self._status(2, dev_no=0, dev_type=-1)
+        self.assertIsNone(client.calling_door("S1"))
+
     def test_no_call_seen(self):
         client = _client()
         client._get = Mock(return_value=self._status(1, dev_no=0, dev_type=-1))
