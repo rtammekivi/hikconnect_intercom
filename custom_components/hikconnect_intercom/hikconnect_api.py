@@ -447,6 +447,7 @@ class HikConnectClient:
             if msg.get("subType") == 2701 and msg.get("time"):
                 cached = self._last_rings.get(serial)
                 if cached and cached["msg_id"] == msg.get("msgId"):
+                    cached["calling_status"] = (msg.get("ext") or {}).get("callingStatus")
                     return cached
                 skew = self._clock_skew_ms(serial)
                 if skew is None:

@@ -85,7 +85,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 out[dev.serial]["polled_at"] = polled_at
             return out
 
-        return await hass.async_add_executor_job(work)
+        result = await hass.async_add_executor_job(work)
+        for serial, polled in result.items():
+            current = (coordinator.data or {}).get(serial) or {}
+            if current.get("local_at", 0.0) > polled["polled_at"]:
+                result[serial] = current
+        return result
 
     coordinator = DataUpdateCoordinator(
         hass,

@@ -110,6 +110,8 @@ class StationReadTests(unittest.TestCase):
         self.assertEqual((ring["msg_id"], ring["calling_status"]), ("m1", 1))
         self.assertAlmostEqual(ring["time"], 1791812071000 - 7_200_000, delta=2000)
         self.assertEqual(client.get_last_ring("S1"), ring)
+        client._get.return_value["message"][0]["ext"]["callingStatus"] = 2
+        self.assertEqual(client.get_last_ring("S1")["calling_status"], 2)
         client.isapi.assert_called_once()
         client._get.return_value = {"message": []}
         self.assertIsNone(client.get_last_ring("S1"))
