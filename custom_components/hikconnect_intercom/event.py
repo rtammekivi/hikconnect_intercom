@@ -48,6 +48,8 @@ class HikDoorbellEvent(CoordinatorEntity, EventEntity):
         if data.get("local"):
             return
         status = data.get("status")
+        if status in (None, "unknown"):
+            return
         if status == "ringing" and self._last_status != "ringing":
             self._trigger_event("ring")
         self._last_status = status

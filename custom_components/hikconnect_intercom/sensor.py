@@ -12,8 +12,10 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfInformation, UnitOfTime
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CALL_STATES, DOMAIN
@@ -156,7 +158,7 @@ class HikMetricSensor(CoordinatorEntity, SensorEntity):
         return self._value_fn((self.coordinator.data or {}).get(self._serial) or {})
 
 
-class HikLastRingSensor(CoordinatorEntity, SensorEntity):
+class HikLastRingSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
     _attr_has_entity_name = True
     _attr_name = "Last ring"
     _attr_icon = "mdi:doorbell"
@@ -166,6 +168,17 @@ class HikLastRingSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._serial = serial
         self._attr_unique_id = f"{DOMAIN}_{serial}_last_ring"
+        self._restored: tuple[str, datetime] | None = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        state = await self.async_get_last_state()
+        if state is None:
+            return
+        msg_id = state.attributes.get("msg_id")
+        value = dt_util.parse_datetime(state.state)
+        if msg_id and value:
+            self._restored = (msg_id, value)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -176,11 +189,15 @@ class HikLastRingSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> datetime | None:
-        ts = self._ring().get("time")
+        ring = self._ring()
+        if self._restored and ring.get("msg_id") == self._restored[0]:
+            return self._restored[1]
+        ts = ring.get("time")
         if not isinstance(ts, (int, float)):
             return None
         return datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
 
     @property
     def extra_state_attributes(self) -> dict:
-        return {"calling_status": self._ring().get("calling_status")}
+        ring = self._ring()
+        return {"calling_status": ring.get("calling_status"), "msg_id": ring.get("msg_id")}

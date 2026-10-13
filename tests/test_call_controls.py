@@ -171,3 +171,7 @@ class DoorbellEventTests(unittest.TestCase):
             {"status": "ringing"},
         ]
         self.assertEqual(self._fire(updates), 2)
+
+    def test_failed_poll_does_not_ring_again(self):
+        updates = [{"status": "ringing"}, {"status": "unknown"}, {"status": "ringing"}]
+        self.assertEqual(self._fire(updates), 1)
