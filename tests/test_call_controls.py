@@ -208,6 +208,15 @@ class CallingDoorTests(unittest.TestCase):
         client._get.return_value = self._status(1, dev_no=0, dev_type=-1)
         self.assertIsNone(client.calling_door("S1"))
 
+    def test_new_caller_without_idle_poll_resets_first_sighting(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=0))
+        client.get_call_status("S1")
+        client._last_callers["S1"] = (0.0, 0.0, client._last_callers["S1"][2])
+        client._get.return_value = self._status(2, dev_no=1)
+        client.get_call_status("S1")
+        self.assertGreater(client._last_callers["S1"][0], 0.0)
+
     def test_unidentified_call_clears_previous_caller(self):
         client = _client()
         client._get = Mock(return_value=self._status(2, dev_no=1))
