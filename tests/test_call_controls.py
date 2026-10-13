@@ -181,7 +181,11 @@ class CallingDoorTests(unittest.TestCase):
         client.get_last_ring = Mock(return_value={"time": (seen_at - 5) * 1000})
         client._get.return_value = self._status(1, dev_no=0, dev_type=-1)
         self.assertEqual(client.calling_door("S1"), 2)
-        client._last_callers["S1"] = (seen_at - 301, client._last_callers["S1"][1])
+        first_seen, _, info = client._last_callers["S1"]
+        client._last_callers["S1"] = (first_seen - 600, seen_at - 200, info)
+        client.get_last_ring.return_value = {"time": (first_seen - 605) * 1000}
+        self.assertEqual(client.calling_door("S1"), 2)
+        client._last_callers["S1"] = (first_seen - 600, seen_at - 301, info)
         self.assertIsNone(client.calling_door("S1"))
 
     def test_newer_ring_hides_previous_caller(self):
