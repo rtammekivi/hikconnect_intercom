@@ -3,9 +3,10 @@
 import json
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import Mock
 
-from tests._modules import load_module
+from tests._modules import load_event, load_module
 
 api = load_module("hikconnect_api")
 
@@ -146,3 +147,27 @@ class StationReadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DoorbellEventTests(unittest.TestCase):
+    def _fire(self, updates):
+        coordinator = SimpleNamespace(data={"S1": {"status": "idle"}})
+        entity = load_event().HikDoorbellEvent(coordinator, "S1")
+        entity._trigger_event = Mock()
+        for data in updates:
+            coordinator.data = {"S1": data}
+            entity._handle_coordinator_update()
+        return entity._trigger_event.call_count
+
+    def test_rings_once_per_call(self):
+        self.assertEqual(self._fire([{"status": "ringing"}, {"status": "ringing"}]), 1)
+
+    def test_stale_poll_after_button_does_not_ring_again(self):
+        updates = [
+            {"status": "ringing"},
+            {"status": "idle", "local": True},
+            {"status": "ringing"},
+            {"status": "idle"},
+            {"status": "ringing"},
+        ]
+        self.assertEqual(self._fire(updates), 2)

@@ -44,7 +44,10 @@ class HikDoorbellEvent(CoordinatorEntity, EventEntity):
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        status = self._status()
+        data = (self.coordinator.data or {}).get(self._serial) or {}
+        if data.get("local"):
+            return
+        status = data.get("status")
         if status == "ringing" and self._last_status != "ringing":
             self._trigger_event("ring")
         self._last_status = status

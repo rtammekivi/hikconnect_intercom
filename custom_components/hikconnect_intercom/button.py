@@ -37,7 +37,7 @@ async def async_setup_entry(
 
 def _set_call_status(coordinator, serial, status):
     data = dict(coordinator.data or {})
-    data[serial] = {**(data.get(serial) or {}), "status": status}
+    data[serial] = {**(data.get(serial) or {}), "status": status, "local": True}
     coordinator.async_set_updated_data(data)
 
 

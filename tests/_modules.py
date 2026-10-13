@@ -47,3 +47,31 @@ def load_camera():
         modules[name] = module
     with patch.dict(sys.modules, modules):
         return load_module("camera")
+
+
+def load_event():
+    class CoordinatorEntity:
+        def __init__(self, coordinator):
+            self.coordinator = coordinator
+
+        def _handle_coordinator_update(self):
+            pass
+
+    interfaces = {
+        "homeassistant.components.event": {
+            "EventDeviceClass": type("EventDeviceClass", (), {"DOORBELL": "doorbell"}),
+            "EventEntity": type("EventEntity", (), {}),
+        },
+        "homeassistant.config_entries": {"ConfigEntry": object},
+        "homeassistant.core": {"HomeAssistant": object, "callback": lambda f: f},
+        "homeassistant.helpers.entity": {"DeviceInfo": dict},
+        "homeassistant.helpers.entity_platform": {"AddEntitiesCallback": object},
+        "homeassistant.helpers.update_coordinator": {"CoordinatorEntity": CoordinatorEntity},
+    }
+    modules = {}
+    for name, attributes in interfaces.items():
+        module = ModuleType(name)
+        module.__dict__.update(attributes)
+        modules[name] = module
+    with patch.dict(sys.modules, modules):
+        return load_module("event")

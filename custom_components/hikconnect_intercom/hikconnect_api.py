@@ -428,7 +428,7 @@ class HikConnectClient:
         return status if isinstance(status, dict) else {}
 
     def get_operation_time(self, serial: str) -> dict[str, int]:
-        r = self.isapi(serial, "GET", "/ISAPI/VideoIntercom/operationTime?format=json")
+        r = self.isapi(serial, "GET", "/ISAPI/VideoIntercom/operationTime")
         try:
             root = ET.fromstring(r.get("data") or "")
         except ET.ParseError:
