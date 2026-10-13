@@ -2,6 +2,7 @@
 
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
 from tests._modules import load_module
@@ -100,10 +101,15 @@ class StationReadTests(unittest.TestCase):
                 ]
             }
         )
-        self.assertEqual(
-            client.get_last_ring("S1"),
-            {"time": 1791812071000, "msg_id": "m1", "calling_status": 1},
+        wall = datetime.now(timezone.utc) + timedelta(hours=2)
+        client.isapi = Mock(
+            return_value={"data": f"<localTime>{wall:%Y-%m-%dT%H:%M:%S}+02:00</localTime>"}
         )
+        ring = client.get_last_ring("S1")
+        self.assertEqual((ring["msg_id"], ring["calling_status"]), ("m1", 1))
+        self.assertAlmostEqual(ring["time"], 1791812071000 - 7_200_000, delta=2000)
+        self.assertEqual(client.get_last_ring("S1"), ring)
+        client.isapi.assert_called_once()
         client._get.return_value = {"message": []}
         self.assertIsNone(client.get_last_ring("S1"))
 

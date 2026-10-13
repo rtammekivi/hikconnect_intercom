@@ -16,7 +16,7 @@ import re
 import threading
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from time import monotonic
 from typing import Any
 from urllib.parse import quote
@@ -106,6 +106,7 @@ class HikConnectClient:
         self._last_login = float("-inf")
         self._login_backoff = 0.0
         self._isapi_call_serials: set[str] = set()
+        self._last_rings: dict[str, dict] = {}
 
     # -- auth -------------------------------------------------------------
     def login(self) -> None:
@@ -444,12 +445,25 @@ class HikConnectClient:
         j = self._get(f"/v3/unifiedmsg/list?stype=27&serials={serial}&limit=1")
         for msg in j.get("message") or []:
             if msg.get("subType") == 2701 and msg.get("time"):
-                return {
-                    "time": msg["time"],
+                cached = self._last_rings.get(serial)
+                if cached and cached["msg_id"] == msg.get("msgId"):
+                    return cached
+                ring = {
+                    "time": msg["time"] - self._clock_skew_ms(serial),
                     "msg_id": msg.get("msgId"),
                     "calling_status": (msg.get("ext") or {}).get("callingStatus"),
                 }
+                self._last_rings[serial] = ring
+                return ring
         return None
+
+    def _clock_skew_ms(self, serial: str) -> int:
+        cur = self.isapi(serial, "GET", "/ISAPI/System/time").get("data") or ""
+        m = re.search(r"<localTime>(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)", cur)
+        if not m:
+            return 0
+        wall = datetime.fromisoformat(m.group(1)).replace(tzinfo=timezone.utc)
+        return round((wall - datetime.now(timezone.utc)).total_seconds()) * 1000
 
     def set_time_now(self, serial: str, wall_now: datetime) -> None:
         """Set the device clock to `wall_now` (the caller's real local wall time).

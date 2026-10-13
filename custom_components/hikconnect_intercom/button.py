@@ -27,7 +27,7 @@ async def async_setup_entry(
         stale = registry.async_get_entity_id("button", DOMAIN, f"{DOMAIN}_{dev.serial}_cancel")
         if stale:
             registry.async_remove(stale)
-        entities.append(HikAnswerButton(hass, client, dev.serial))
+        entities.append(HikAnswerButton(hass, client, coordinator, dev.serial))
         entities.append(HikHangUpButton(hass, client, coordinator, dev.serial))
         if dev.locks:
             entities.append(HikUnlockAllButton(hass, client, dev))
@@ -35,14 +35,21 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
+def _set_call_status(coordinator, serial, status):
+    data = dict(coordinator.data or {})
+    data[serial] = {**(data.get(serial) or {}), "status": status}
+    coordinator.async_set_updated_data(data)
+
+
 class HikAnswerButton(ButtonEntity):
     _attr_has_entity_name = True
     _attr_name = "Answer call"
     _attr_icon = "mdi:phone"
 
-    def __init__(self, hass, client, serial):
+    def __init__(self, hass, client, coordinator, serial):
         self.hass = hass
         self._client = client
+        self._coordinator = coordinator
         self._serial = serial
         self._attr_unique_id = f"{DOMAIN}_{serial}_answer"
 
@@ -52,6 +59,7 @@ class HikAnswerButton(ButtonEntity):
 
     async def async_press(self) -> None:
         await self.hass.async_add_executor_job(self._client.answer_call, self._serial)
+        _set_call_status(self._coordinator, self._serial, "call in progress")
 
 
 class HikHangUpButton(ButtonEntity):
@@ -75,7 +83,7 @@ class HikHangUpButton(ButtonEntity):
         await self.hass.async_add_executor_job(
             self._client.end_call, self._serial, status
         )
-        await self._coordinator.async_request_refresh()
+        _set_call_status(self._coordinator, self._serial, "idle")
 
 
 class HikUnlockAllButton(ButtonEntity):
