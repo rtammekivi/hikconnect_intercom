@@ -4,7 +4,7 @@ import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from tests._modules import load_event, load_module
 
@@ -177,10 +177,31 @@ class CallingDoorTests(unittest.TestCase):
         client = _client()
         client._get = Mock(return_value=self._status(2, dev_no=1))
         client.get_call_status("S1")
+        seen_at = client._last_callers["S1"][0]
+        client.get_last_ring = Mock(return_value={"time": (seen_at - 5) * 1000})
         client._get.return_value = self._status(1, dev_no=0, dev_type=-1)
         self.assertEqual(client.calling_door("S1"), 2)
-        with patch.object(api, "monotonic", return_value=api.monotonic() + 301):
-            self.assertIsNone(client.calling_door("S1"))
+        client._last_callers["S1"] = (seen_at - 301, client._last_callers["S1"][1])
+        self.assertIsNone(client.calling_door("S1"))
+
+    def test_newer_ring_hides_previous_caller(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=1))
+        client.get_call_status("S1")
+        seen_at = client._last_callers["S1"][0]
+        client.get_last_ring = Mock(return_value={"time": (seen_at + 30) * 1000})
+        client._get.return_value = self._status(1, dev_no=0, dev_type=-1)
+        self.assertIsNone(client.calling_door("S1"))
+
+    def test_unidentified_call_clears_previous_caller(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=1))
+        client.get_call_status("S1")
+        client._get.return_value = self._status(2, dev_no=0, dev_type=-1)
+        client.get_call_status("S1")
+        client.get_last_ring = Mock(return_value=None)
+        client._get.return_value = self._status(1, dev_no=0, dev_type=-1)
+        self.assertIsNone(client.calling_door("S1"))
 
     def test_unclear_status_does_not_use_previous_caller(self):
         client = _client()

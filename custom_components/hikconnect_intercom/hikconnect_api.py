@@ -354,8 +354,11 @@ class HikConnectClient:
         data = json.loads(r["data"])
         status = _CALL_STATUS.get(data.get("callStatus"), "unknown")
         info = data.get("callerInfo") or {}
-        if status in ("ringing", "call in progress") and info.get("devType", -1) != -1:
-            self._last_callers[serial] = (monotonic(), info)
+        if status in ("ringing", "call in progress"):
+            if info.get("devType", -1) != -1:
+                self._last_callers[serial] = (datetime.now(timezone.utc).timestamp(), info)
+            else:
+                self._last_callers.pop(serial, None)
         return {"status": status, "info": info}
 
     def calling_door(self, serial: str) -> int | None:
@@ -364,7 +367,10 @@ class HikConnectClient:
             info = current["info"] if current["info"].get("devType", -1) != -1 else {}
         elif current["status"] == "idle":
             seen = self._last_callers.get(serial)
-            if seen is None or monotonic() - seen[0] > _CALLER_MEMORY:
+            if seen is None or datetime.now(timezone.utc).timestamp() - seen[0] > _CALLER_MEMORY:
+                return None
+            ring = self.get_last_ring(serial)
+            if ring is None or ring["time"] / 1000 > seen[0] + 2:
                 return None
             info = seen[1]
         else:
