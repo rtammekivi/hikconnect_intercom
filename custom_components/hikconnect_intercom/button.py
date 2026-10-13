@@ -8,6 +8,7 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -33,6 +34,7 @@ async def async_setup_entry(
         entities.append(HikHangUpButton(hass, client, coordinator, dev.serial))
         if dev.locks:
             entities.append(HikUnlockAllButton(hass, client, dev))
+            entities.append(HikUnlockCallingDoorButton(hass, client, dev))
             entities.append(HikSyncTimeButton(hass, client, dev.serial))
     async_add_entities(entities)
 
@@ -112,6 +114,34 @@ class HikUnlockAllButton(ButtonEntity):
                     self._client.unlock(self._dev.serial, channel, idx)
 
         await self.hass.async_add_executor_job(work)
+
+
+class HikUnlockCallingDoorButton(ButtonEntity):
+    _attr_has_entity_name = True
+    _attr_name = "Unlock calling door"
+    _attr_icon = "mdi:door-open"
+
+    def __init__(self, hass, client, dev):
+        self.hass = hass
+        self._client = client
+        self._dev = dev
+        self._attr_unique_id = f"{DOMAIN}_{dev.serial}_unlock_calling"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._dev.serial)})
+
+    async def async_press(self) -> None:
+        channel = await self.hass.async_add_executor_job(
+            self._client.calling_door, self._dev.serial
+        )
+        if channel is None:
+            raise HomeAssistantError("No recent call to unlock")
+        if channel not in self._dev.locks:
+            raise HomeAssistantError(f"Calling door (channel {channel}) has no lock")
+        await self.hass.async_add_executor_job(
+            self._client.unlock, self._dev.serial, channel, 0
+        )
 
 
 class HikSyncTimeButton(ButtonEntity):

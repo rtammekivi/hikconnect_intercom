@@ -4,7 +4,7 @@ import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from tests._modules import load_event, load_module
 
@@ -158,6 +158,34 @@ class StationReadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CallingDoorTests(unittest.TestCase):
+    @staticmethod
+    def _status(call_status, dev_no=0, dev_type=1):
+        info = {"devNo": dev_no, "devType": dev_type, "lockNum": 1}
+        return {"meta": {"code": 200}, "data": json.dumps({"callStatus": call_status, "callerInfo": info})}
+
+    def test_maps_dev_no_to_channel(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=1))
+        self.assertEqual(client.calling_door("S1"), 2)
+        client._get.return_value = self._status(3, dev_no=0)
+        self.assertEqual(client.calling_door("S1"), 1)
+
+    def test_remembers_caller_after_call_ends(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=1))
+        client.get_call_status("S1")
+        client._get.return_value = self._status(1, dev_no=0, dev_type=-1)
+        self.assertEqual(client.calling_door("S1"), 2)
+        with patch.object(api, "monotonic", return_value=api.monotonic() + 301):
+            self.assertIsNone(client.calling_door("S1"))
+
+    def test_no_call_seen(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(1, dev_no=0, dev_type=-1))
+        self.assertIsNone(client.calling_door("S1"))
 
 
 class DoorbellEventTests(unittest.TestCase):
