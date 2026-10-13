@@ -102,9 +102,11 @@ Tap the feature in the app (or `adb shell input tap X Y`) and read the log.
 python3 scripts/push_monitor.py SERIAL
 ```
 
-This registers its own push client on `pusheu.ezvizlife.com`;
-`pusheu.hik-connect.com`, the host the cloud hands out, drops requests. After
-each push it polls `callStatus`/`callerInfo` for 40 s. `callerInfo` only
+This registers its own push client on the account's push host, from
+`/v3/configurations/system/info`. If that host fails, it swaps
+`.hik-connect.com` for `.ezvizlife.com`: `pusheu.hik-connect.com` drops
+requests, while the US/SA hosts work. After each push it polls
+`callStatus`/`callerInfo` for 40 s. `callerInfo` only
 answers while a call is active.
 
 ## Cleanup

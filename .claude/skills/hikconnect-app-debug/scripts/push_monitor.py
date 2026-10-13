@@ -20,7 +20,6 @@ sys.path.append(str(REPO / "custom_components/hikconnect_intercom"))
 from const import MQTT_APP_KEY as KEY, MQTT_APP_SECRET as SECRET  # noqa: E402
 from hikconnect_api import HikConnectClient  # noqa: E402
 
-PUSH_HOST = "pusheu.ezvizlife.com"
 serial = sys.argv[1]
 creds = Path(os.environ.get("HIK_CREDS", REPO.parent / ".hik"))
 account, password = [x.strip() for x in creds.read_text().splitlines()[:2]]
@@ -33,15 +32,28 @@ def log(*a):
 
 
 auth = "Basic " + base64.b64encode(f"{KEY}:{SECRET}".encode()).decode()
-reg = requests.post(
-    f"https://{PUSH_HOST}/v1/getClientId",
-    data=dict(appKey=KEY, clientType="5", mac=hashlib.md5(b"hc-debug").hexdigest(),
-              token="123456", version="v1.3.0"),
-    headers={"Authorization": auth}, timeout=20,
-).json()["data"]
+
+
+def register(host):
+    return requests.post(
+        f"https://{host}/v1/getClientId",
+        data=dict(appKey=KEY, clientType="5", mac=hashlib.md5(b"hc-debug").hexdigest(),
+                  token="123456", version="v1.3.0"),
+        headers={"Authorization": auth}, timeout=20,
+    ).json()["data"]
+
+
+push_host = client._get("/v3/configurations/system/info")["systemConfigInfo"]["pushAddr"]
+try:
+    reg = register(push_host)
+except (requests.RequestException, ValueError, KeyError):
+    push_host = push_host.replace(".hik-connect.com", ".ezvizlife.com")
+    reg = register(push_host)
+log("push host", push_host)
 client_id = reg["clientId"]
+broker_host, broker_port = reg["mqtts"].split("://")[-1].split(":")
 requests.post(
-    f"https://{PUSH_HOST}/api/push/start",
+    f"https://{push_host}/api/push/start",
     data=dict(appKey=KEY, clientId=client_id, clientType=5, sessionId=client._session_id,
               username=client._username, token="123456"),
     timeout=20,
@@ -59,7 +71,7 @@ m = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id, clean_ses
 m.username_pw_set(KEY, SECRET)
 m.on_connect = lambda c, *_: (c.subscribe(f"{KEY}/#", qos=2), log("mqtt connected"))
 m.on_message = on_message
-m.connect(PUSH_HOST, 1882, 30)
+m.connect(broker_host, int(broker_port), 30)
 m.loop_start()
 
 while True:
