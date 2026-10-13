@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.8](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.7...v0.10.8) (2026-10-13)
+
+
+### Bug Fixes
+
+* **camera:** decode encrypted recorder streams and release cancelled connections ([b0c17eb](https://github.com/rtammekivi/hikconnect_intercom/commit/b0c17eba4b9132ac00db307ff8d2180b80f34927))
+* **camera:** support encrypted recorder video and prevent stream slot leaks ([66c278b](https://github.com/rtammekivi/hikconnect_intercom/commit/66c278b18a76bcd7a1b3261515a5169006e24604))
+* **ci:** use test requirements for Python dependency cache ([6067ea7](https://github.com/rtammekivi/hikconnect_intercom/commit/6067ea7cee88630fe2146b848bb8b7981e128f2e))
+
 ## [0.10.7](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.6...v0.10.7) (2026-10-01)
 
 
