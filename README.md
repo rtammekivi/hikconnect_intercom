@@ -89,19 +89,25 @@ can still prevent a third channel from opening.
 - **Camera** — one per real door-station channel (native local CPD7 video).
 - **Lock** — one per unlock-capable channel; opens the door latch (momentary,
   auto-relocks after a few seconds). Uses the cloud remote-unlock endpoint.
-- **Buttons** — *Answer call*, *Hang up call*, *Cancel call* (cloud call ops),
+- **Buttons** — *Answer call*, *Hang up call*, *Reject call* (cloud call ops;
+  stations that support it get the ISAPI `callSignal` command the app uses),
   *Unlock all doors* (opens every lock-capable channel at once), and *Sync time*
   (config; sets the station clock to HA's DST-aware local time via ISAPI).
 - **Call status sensor** — `idle` / `ringing` / `call in progress`. State comes
   from the authoritative cloud poll; a realtime MQTT push event triggers an
   immediate re-poll so ringing shows in near real time.
+- **Doorbell event** — fires `ring` when the call status turns to ringing.
+- **Last ring sensor** — timestamp of the latest ring from the account's
+  message history (`/v3/unifiedmsg/list`).
 - **Volume numbers** — Ringtone / Two-way audio / Microphone (0-10), via the
   Hik-Connect cloud **ISAPI passthrough** (`/api/device/isapi`).
 - **Do Not Disturb switch** — account-level; when on, calls from the device are
   silenced (`/v3/unifiedmsg/notify/nodisturb`).
 - **Daylight-saving switch** — device time config (`/api/device/configTimeZone`).
-- **Diagnostics** — connectivity, firmware-update, storage health binary sensors;
-  WiFi signal, LAN IP, WAN IP, connection type, storage capacity, last-offline.
+- **Diagnostics** — connectivity, door-station link, firmware-update, storage
+  health binary sensors; WiFi signal, LAN IP, WAN IP, connection type, storage
+  capacity, last-offline, SD card, and the station's ring / monitoring /
+  call-forwarding timeouts.
 - **Stream quality select** — HD (main) / SD (sub) per camera.
 
 All controls, config, and status go through the Hik-Connect **cloud** — the same

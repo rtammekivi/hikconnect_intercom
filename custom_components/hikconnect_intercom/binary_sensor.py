@@ -16,6 +16,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 
 
+def _door_station_link(status: dict) -> bool | None:
+    sip = (status.get("work_status") or {}).get("privateSipStatus")
+    return None if sip is None else sip == "connect"
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -37,6 +42,14 @@ async def async_setup_entry(
                 BinarySensorDeviceClass.UPDATE, EntityCategory.DIAGNOSTIC,
             )
         )
+        if dev.locks:
+            entities.append(
+                HikBinary(
+                    coordinator, dev.serial, "door_station_link", "Door station link",
+                    _door_station_link,
+                    BinarySensorDeviceClass.CONNECTIVITY, EntityCategory.DIAGNOSTIC,
+                )
+            )
         status = (coordinator.data or {}).get(dev.serial) or {}
         if status.get("disk_present"):
             entities.append(

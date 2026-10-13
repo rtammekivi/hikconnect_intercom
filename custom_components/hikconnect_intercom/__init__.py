@@ -33,6 +33,7 @@ PLATFORMS = [
     Platform.LOCK,
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
+    Platform.EVENT,
     Platform.SELECT,
     Platform.NUMBER,
     Platform.SWITCH,
@@ -112,6 +113,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     status[dev.serial]["dnd"] = client.get_dnd(dev.serial)
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.warning("dnd fetch failed for %s: %s", dev.serial, err)
+                try:
+                    status[dev.serial]["last_ring"] = client.get_last_ring(dev.serial)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning("ring history fetch failed for %s: %s", dev.serial, err)
+                try:
+                    status[dev.serial]["work_status"] = client.get_work_status(dev.serial)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning("work status fetch failed for %s: %s", dev.serial, err)
+                try:
+                    status[dev.serial]["operation_time"] = client.get_operation_time(dev.serial)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning("operation time fetch failed for %s: %s", dev.serial, err)
         return status
 
     async def _poll_status() -> dict[str, dict]:

@@ -10,7 +10,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfInformation
+from homeassistant.const import EntityCategory, UnitOfInformation, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -55,6 +55,28 @@ _METRICS = (
 )
 
 
+def _operation_time(key: str):
+    return lambda s: (s.get("operation_time") or {}).get(key)
+
+
+_STATION_METRICS = (
+    ("sd_card", "SD card", "mdi:micro-sd", None, None, None, None,
+     lambda s: (s.get("work_status") or {}).get("TFCardStatus")),
+    ("max_ring_time", "Max ring time", "mdi:bell-ring-outline",
+     UnitOfTime.SECONDS, SensorDeviceClass.DURATION, None, None,
+     _operation_time("maxRingTime")),
+    ("ring_duration", "Ring duration", "mdi:bell-outline",
+     UnitOfTime.SECONDS, SensorDeviceClass.DURATION, None, None,
+     _operation_time("ringDurationTime")),
+    ("max_monitoring_time", "Max monitoring time", "mdi:cctv",
+     UnitOfTime.SECONDS, SensorDeviceClass.DURATION, None, None,
+     _operation_time("maxMonitoringTime")),
+    ("call_forwarding_time", "Call forwarding time", "mdi:phone-forward",
+     UnitOfTime.SECONDS, SensorDeviceClass.DURATION, None, None,
+     _operation_time("callForwardingTime")),
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -69,6 +91,10 @@ async def async_setup_entry(
             if spec[0] == "storage_capacity" and not st.get("disk_present"):
                 continue
             entities.append(HikMetricSensor(status, dev.serial, *spec))
+        if dev.locks:
+            entities.append(HikLastRingSensor(status, dev.serial))
+            for spec in _STATION_METRICS:
+                entities.append(HikMetricSensor(status, dev.serial, *spec))
     async_add_entities(entities)
 
 
@@ -128,3 +154,33 @@ class HikMetricSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         return self._value_fn((self.coordinator.data or {}).get(self._serial) or {})
+
+
+class HikLastRingSensor(CoordinatorEntity, SensorEntity):
+    _attr_has_entity_name = True
+    _attr_name = "Last ring"
+    _attr_icon = "mdi:doorbell"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator, serial):
+        super().__init__(coordinator)
+        self._serial = serial
+        self._attr_unique_id = f"{DOMAIN}_{serial}_last_ring"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._serial)})
+
+    def _ring(self) -> dict:
+        return ((self.coordinator.data or {}).get(self._serial) or {}).get("last_ring") or {}
+
+    @property
+    def native_value(self) -> datetime | None:
+        ts = self._ring().get("time")
+        if not isinstance(ts, (int, float)):
+            return None
+        return datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"calling_status": self._ring().get("calling_status")}
