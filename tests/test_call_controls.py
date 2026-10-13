@@ -173,11 +173,19 @@ class DoorbellEventTests(unittest.TestCase):
 
     def test_stale_poll_after_button_does_not_ring_again(self):
         updates = [
-            {"status": "ringing"},
-            {"status": "idle", "local": True},
-            {"status": "ringing"},
-            {"status": "idle"},
-            {"status": "ringing"},
+            {"status": "ringing", "polled_at": 1.0},
+            {"status": "idle", "local_at": 3.0},
+            {"status": "ringing", "polled_at": 2.0},
+            {"status": "idle", "polled_at": 4.0},
+            {"status": "ringing", "polled_at": 5.0},
+        ]
+        self.assertEqual(self._fire(updates), 2)
+
+    def test_new_ring_right_after_local_hang_up_fires(self):
+        updates = [
+            {"status": "ringing", "polled_at": 1.0},
+            {"status": "idle", "local_at": 3.0},
+            {"status": "ringing", "polled_at": 4.0},
         ]
         self.assertEqual(self._fire(updates), 2)
 

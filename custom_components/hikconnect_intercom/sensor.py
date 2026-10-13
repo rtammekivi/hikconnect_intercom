@@ -11,7 +11,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfInformation, UnitOfTime
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -168,36 +168,42 @@ class HikLastRingSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         super().__init__(coordinator)
         self._serial = serial
         self._attr_unique_id = f"{DOMAIN}_{serial}_last_ring"
-        self._restored: tuple[str, datetime] | None = None
+        self._msg_id: str | None = None
+        self._calling_status = None
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         state = await self.async_get_last_state()
-        if state is None:
-            return
-        msg_id = state.attributes.get("msg_id")
-        value = dt_util.parse_datetime(state.state)
-        if msg_id and value:
-            self._restored = (msg_id, value)
+        if state is not None:
+            value = dt_util.parse_datetime(state.state)
+            if value and state.attributes.get("msg_id"):
+                self._attr_native_value = value
+                self._msg_id = state.attributes["msg_id"]
+                self._calling_status = state.attributes.get("calling_status")
+        self._update_ring()
 
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(identifiers={(DOMAIN, self._serial)})
 
-    def _ring(self) -> dict:
-        return ((self.coordinator.data or {}).get(self._serial) or {}).get("last_ring") or {}
+    def _update_ring(self) -> None:
+        ring = ((self.coordinator.data or {}).get(self._serial) or {}).get("last_ring") or {}
+        msg_id = ring.get("msg_id")
+        if not msg_id:
+            return
+        if msg_id != self._msg_id:
+            ts = ring.get("time")
+            if not isinstance(ts, (int, float)):
+                return
+            self._attr_native_value = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+            self._msg_id = msg_id
+        self._calling_status = ring.get("calling_status")
 
-    @property
-    def native_value(self) -> datetime | None:
-        ring = self._ring()
-        if self._restored and ring.get("msg_id") == self._restored[0]:
-            return self._restored[1]
-        ts = ring.get("time")
-        if not isinstance(ts, (int, float)):
-            return None
-        return datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._update_ring()
+        super()._handle_coordinator_update()
 
     @property
     def extra_state_attributes(self) -> dict:
-        ring = self._ring()
-        return {"calling_status": ring.get("calling_status"), "msg_id": ring.get("msg_id")}
+        return {"calling_status": self._calling_status, "msg_id": self._msg_id}

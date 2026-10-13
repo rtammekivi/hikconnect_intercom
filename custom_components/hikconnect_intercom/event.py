@@ -34,6 +34,7 @@ class HikDoorbellEvent(CoordinatorEntity, EventEntity):
         self._serial = serial
         self._attr_unique_id = f"{DOMAIN}_{serial}_doorbell"
         self._last_status = self._status()
+        self._local_at = 0.0
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -45,10 +46,12 @@ class HikDoorbellEvent(CoordinatorEntity, EventEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         data = (self.coordinator.data or {}).get(self._serial) or {}
-        if data.get("local"):
-            return
         status = data.get("status")
-        if status in (None, "unknown"):
+        if "local_at" in data:
+            self._local_at = data["local_at"]
+            self._last_status = status
+            return
+        if status in (None, "unknown") or data.get("polled_at", self._local_at) < self._local_at:
             return
         if status == "ringing" and self._last_status != "ringing":
             self._trigger_event("ring")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
@@ -71,6 +72,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def _poll_call_status() -> dict[str, dict]:
         def work():
+            polled_at = time.monotonic()
             out: dict[str, dict] = {}
             for dev in devices:
                 try:
@@ -80,6 +82,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.debug("call status poll failed for %s: %s", dev.serial, err)
                     out[dev.serial] = {"status": "unknown", "info": {}}
+                out[dev.serial]["polled_at"] = polled_at
             return out
 
         return await hass.async_add_executor_job(work)
