@@ -108,7 +108,7 @@ class HikConnectClient:
         self._login_backoff = 0.0
         self._isapi_call_serials: set[str] = set()
         self._last_rings: dict[str, dict] = {}
-        self._last_callers: dict[str, tuple[float, dict]] = {}
+        self._last_callers: dict[str, tuple[float, float, dict]] = {}
         self._in_call: dict[str, bool] = {}
 
     # -- auth -------------------------------------------------------------
@@ -358,12 +358,13 @@ class HikConnectClient:
         active = status in ("ringing", "call in progress")
         if active:
             previous = self._last_callers.get(serial)
+            now = datetime.now(timezone.utc).timestamp()
             if info.get("devType", -1) == -1:
                 self._last_callers.pop(serial, None)
             elif previous and self._in_call.get(serial):
-                self._last_callers[serial] = (previous[0], info)
+                self._last_callers[serial] = (previous[0], now, info)
             else:
-                self._last_callers[serial] = (datetime.now(timezone.utc).timestamp(), info)
+                self._last_callers[serial] = (now, now, info)
         if status != "unknown":
             self._in_call[serial] = active
         return {"status": status, "info": info}
@@ -374,12 +375,12 @@ class HikConnectClient:
             info = current["info"] if current["info"].get("devType", -1) != -1 else {}
         elif current["status"] == "idle":
             seen = self._last_callers.get(serial)
-            if seen is None or datetime.now(timezone.utc).timestamp() - seen[0] > _CALLER_MEMORY:
+            if seen is None or datetime.now(timezone.utc).timestamp() - seen[1] > _CALLER_MEMORY:
                 return None
             ring = self.get_last_ring(serial)
             if ring is None or ring["time"] / 1000 >= seen[0]:
                 return None
-            info = seen[1]
+            info = seen[2]
         else:
             return None
         dev_no = info.get("devNo")
