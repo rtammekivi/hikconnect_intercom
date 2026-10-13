@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from time import monotonic
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -62,6 +63,7 @@ class HikDevice:
     device_type: str
     locks: dict[int, int] = field(default_factory=dict)  # channel -> lock count
     version: str = ""
+    support_isapi: bool = False
 
 
 @dataclass
@@ -103,6 +105,7 @@ class HikConnectClient:
         self._auth_lock = threading.Lock()
         self._last_login = float("-inf")
         self._login_backoff = 0.0
+        self._isapi_call_serials: set[str] = set()
 
     # -- auth -------------------------------------------------------------
     def login(self) -> None:
@@ -183,8 +186,11 @@ class HikConnectClient:
                         d.get("deviceType", ""),
                         self._parse_locks(stats.get(serial) or {}),
                         d.get("version", ""),
+                        self._parse_support_isapi(d.get("supportExt")),
                     )
                 )
+                if devices[-1].support_isapi:
+                    self._isapi_call_serials.add(serial)
             offset += limit
             has_next = (j.get("page") or {}).get("hasNext", False)
         return devices
@@ -268,7 +274,10 @@ class HikConnectClient:
         command; the real result is the device's ``data.rc`` (1 == ok). Without
         this the button silently no-ops on a rejection (e.g. rc 1952).
         """
-        r = self._put(f"/v3/devconfig/v1/call/{serial}/operation?cmdId={cmd_id}")
+        r = self._put(
+            f"/v3/devconfig/v1/call/{serial}/operation"
+            f"?cmdId={cmd_id}&handler={quote(self._username or '')}"
+        )
         meta = (r.get("meta") or {}).get("code")
         try:
             rc = json.loads(r.get("data") or "{}").get("rc")
@@ -278,14 +287,36 @@ class HikConnectClient:
             raise HikConnectError(f"{what} rejected (meta={meta}, rc={rc})")
         return r
 
-    def answer_call(self, serial: str) -> dict:
-        return self._call_operation(serial, 2, "answer")
+    def _call_signal(self, serial: str, cmd_type: str) -> dict:
+        body = json.dumps(
+            {"CallSignal": {"cmdType": cmd_type, "sessionId": self._username or ""}}
+        )
+        r = self.isapi(serial, "PUT", "/ISAPI/VideoIntercom/callSignal?format=json", body)
+        try:
+            status = json.loads(r.get("data") or "{}")
+        except (ValueError, TypeError):
+            status = {}
+        code = str(status.get("statusCode", ""))
+        if str(r.get("resultCode")) != "0" or code not in ("", "1"):
+            raise HikConnectError(
+                f"{cmd_type} rejected (resultCode={r.get('resultCode')}, "
+                f"statusCode={code}, sub={status.get('subStatusCode')})"
+            )
+        return r
 
-    def cancel_call(self, serial: str) -> dict:
-        return self._call_operation(serial, 3, "cancel")
+    def _call_command(self, serial: str, cmd_type: str, cmd_id: int) -> dict:
+        if serial in self._isapi_call_serials:
+            return self._call_signal(serial, cmd_type)
+        return self._call_operation(serial, cmd_id, cmd_type)
+
+    def answer_call(self, serial: str) -> dict:
+        return self._call_command(serial, "answer", 2)
+
+    def reject_call(self, serial: str) -> dict:
+        return self._call_command(serial, "reject", 3)
 
     def hangup_call(self, serial: str) -> dict:
-        return self._call_operation(serial, 5, "hangup")
+        return self._call_command(serial, "hangUp", 5)
 
     def get_call_status(self, serial: str) -> dict:
         """Return {'status': idle|ringing|call in progress|unknown, 'info': {...}}."""
@@ -361,6 +392,39 @@ class HikConnectClient:
             "</AudioOutVlome></AudioOutVolumelist><id>1</id></AudioOut>"
         )
         self.isapi(serial, "PUT", "/ISAPI/System/Audio/AudioOut/channels/1", body)
+
+    def get_work_status(self, serial: str) -> dict[str, str]:
+        r = self.isapi(serial, "GET", "/ISAPI/AccessControl/AcsWorkStatus?format=json")
+        try:
+            status = json.loads(r.get("data") or "{}").get("AcsWorkStatus")
+        except (ValueError, TypeError, AttributeError):
+            status = None
+        return status if isinstance(status, dict) else {}
+
+    def get_operation_time(self, serial: str) -> dict[str, int]:
+        r = self.isapi(serial, "GET", "/ISAPI/VideoIntercom/operationTime?format=json")
+        try:
+            root = ET.fromstring(r.get("data") or "")
+        except ET.ParseError:
+            return {}
+        out: dict[str, int] = {}
+        for el in root:
+            try:
+                out[el.tag.split("}")[-1]] = int(el.text)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def get_last_ring(self, serial: str) -> dict | None:
+        j = self._get(f"/v3/unifiedmsg/list?stype=27&serials={serial}&limit=1")
+        for msg in j.get("message") or []:
+            if msg.get("subType") == 2701 and msg.get("time"):
+                return {
+                    "time": msg["time"],
+                    "msg_id": msg.get("msgId"),
+                    "calling_status": (msg.get("ext") or {}).get("callingStatus"),
+                }
+        return None
 
     def set_time_now(self, serial: str, wall_now: datetime) -> None:
         """Set the device clock to `wall_now` (the caller's real local wall time).
@@ -478,6 +542,17 @@ class HikConnectClient:
         if not value or value in ("0.0.0.0", ""):
             return None
         return value
+
+    @staticmethod
+    def _parse_support_isapi(support_ext: Any) -> bool:
+        if isinstance(support_ext, str):
+            try:
+                support_ext = json.loads(support_ext)
+            except ValueError:
+                return False
+        if not isinstance(support_ext, dict):
+            return False
+        return str(support_ext.get("145")) == "1"
 
     @staticmethod
     def _parse_locks(status_info: dict) -> dict[int, int]:

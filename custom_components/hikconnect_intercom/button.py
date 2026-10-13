@@ -1,4 +1,4 @@
-"""Call-operation buttons (answer / cancel / hangup) for a Hik-Connect station."""
+"""Call-operation buttons (answer / reject / hangup) for a Hik-Connect station."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .const import DOMAIN
 _BUTTONS = (
     ("answer", "Answer call", "mdi:phone", "answer_call"),
     ("hangup", "Hang up call", "mdi:phone-hangup", "hangup_call"),
-    ("cancel", "Cancel call", "mdi:phone-cancel", "cancel_call"),
+    ("cancel", "Reject call", "mdi:phone-cancel", "reject_call"),
 )
 
 
