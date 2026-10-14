@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 
+import aiohttp
 import paho.mqtt.client as mqtt
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -43,7 +44,15 @@ class HikConnectPush:
         session = async_get_clientsession(self._hass)
         base, session_id, username = await self._login(session)
         push_addr = await self._get_push_addr(session, base, session_id)
-        client_id, broker = await self._register(session, push_addr)
+        try:
+            client_id, broker = await self._register(session, push_addr)
+        except (aiohttp.ClientError, ValueError, KeyError) as err:
+            fallback = push_addr.replace(".hik-connect.com", ".ezvizlife.com")
+            if fallback == push_addr:
+                raise
+            _LOGGER.debug("push register on %s failed (%s), using %s", push_addr, err, fallback)
+            push_addr = fallback
+            client_id, broker = await self._register(session, push_addr)
         await self._start_push(session, push_addr, client_id, session_id, username)
         await self._hass.async_add_executor_job(self._connect, broker, client_id)
         _LOGGER.info("Hik-Connect push listener started (broker=%s)", broker)
@@ -124,7 +133,7 @@ class HikConnectPush:
         c.on_connect = self._on_connect
         c.on_message = self._on_message
         c.reconnect_delay_set(min_delay=5, max_delay=60)
-        c.connect(host, port, keepalive=60)
+        c.connect(host, port, keepalive=30)
         self._client = c
         c.loop_start()
 

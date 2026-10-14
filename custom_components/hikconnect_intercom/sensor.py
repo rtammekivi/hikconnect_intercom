@@ -10,10 +10,12 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfInformation
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EntityCategory, UnitOfInformation, UnitOfTime
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.util import dt as dt_util
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CALL_STATES, DOMAIN
@@ -55,6 +57,28 @@ _METRICS = (
 )
 
 
+def _operation_time(key: str):
+    return lambda s: (s.get("operation_time") or {}).get(key)
+
+
+_STATION_METRICS = (
+    ("sd_card", "SD card", "mdi:micro-sd", None, None, None, None,
+     lambda s: (s.get("work_status") or {}).get("TFCardStatus")),
+    ("max_ring_time", "Max ring time", "mdi:bell-ring-outline",
+     UnitOfTime.SECONDS, SensorDeviceClass.DURATION, None, None,
+     _operation_time("maxRingTime")),
+    ("ring_duration", "Ring duration", "mdi:bell-outline",
+     UnitOfTime.SECONDS, SensorDeviceClass.DURATION, None, None,
+     _operation_time("ringDurationTime")),
+    ("max_monitoring_time", "Max monitoring time", "mdi:cctv",
+     UnitOfTime.SECONDS, SensorDeviceClass.DURATION, None, None,
+     _operation_time("maxMonitoringTime")),
+    ("call_forwarding_time", "Call forwarding time", "mdi:phone-forward",
+     UnitOfTime.SECONDS, SensorDeviceClass.DURATION, None, None,
+     _operation_time("callForwardingTime")),
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -69,6 +93,10 @@ async def async_setup_entry(
             if spec[0] == "storage_capacity" and not st.get("disk_present"):
                 continue
             entities.append(HikMetricSensor(status, dev.serial, *spec))
+        if dev.locks:
+            entities.append(HikLastRingSensor(status, dev.serial))
+            for spec in _STATION_METRICS:
+                entities.append(HikMetricSensor(status, dev.serial, *spec))
     async_add_entities(entities)
 
 
@@ -128,3 +156,54 @@ class HikMetricSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         return self._value_fn((self.coordinator.data or {}).get(self._serial) or {})
+
+
+class HikLastRingSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
+    _attr_has_entity_name = True
+    _attr_name = "Last ring"
+    _attr_icon = "mdi:doorbell"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator, serial):
+        super().__init__(coordinator)
+        self._serial = serial
+        self._attr_unique_id = f"{DOMAIN}_{serial}_last_ring"
+        self._msg_id: str | None = None
+        self._calling_status = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        state = await self.async_get_last_state()
+        if state is not None:
+            value = dt_util.parse_datetime(state.state)
+            if value and state.attributes.get("msg_id"):
+                self._attr_native_value = value
+                self._msg_id = state.attributes["msg_id"]
+                self._calling_status = state.attributes.get("calling_status")
+        self._update_ring()
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._serial)})
+
+    def _update_ring(self) -> None:
+        ring = ((self.coordinator.data or {}).get(self._serial) or {}).get("last_ring") or {}
+        msg_id = ring.get("msg_id")
+        if not msg_id:
+            return
+        if msg_id != self._msg_id:
+            ts = ring.get("time")
+            if not isinstance(ts, (int, float)):
+                return
+            self._attr_native_value = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+            self._msg_id = msg_id
+        self._calling_status = ring.get("calling_status")
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._update_ring()
+        super()._handle_coordinator_update()
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"calling_status": self._calling_status, "msg_id": self._msg_id}

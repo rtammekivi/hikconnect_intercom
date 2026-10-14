@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
@@ -33,6 +34,7 @@ PLATFORMS = [
     Platform.LOCK,
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
+    Platform.EVENT,
     Platform.SELECT,
     Platform.NUMBER,
     Platform.SWITCH,
@@ -70,6 +72,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def _poll_call_status() -> dict[str, dict]:
         def work():
+            polled_at = time.monotonic()
             out: dict[str, dict] = {}
             for dev in devices:
                 try:
@@ -79,9 +82,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.debug("call status poll failed for %s: %s", dev.serial, err)
                     out[dev.serial] = {"status": "unknown", "info": {}}
+                out[dev.serial]["polled_at"] = polled_at
             return out
 
-        return await hass.async_add_executor_job(work)
+        result = await hass.async_add_executor_job(work)
+        for serial, polled in result.items():
+            current = (coordinator.data or {}).get(serial) or {}
+            if current.get("local_at", 0.0) > polled["polled_at"]:
+                result[serial] = current
+        return result
 
     coordinator = DataUpdateCoordinator(
         hass,
@@ -112,6 +121,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     status[dev.serial]["dnd"] = client.get_dnd(dev.serial)
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.warning("dnd fetch failed for %s: %s", dev.serial, err)
+                try:
+                    status[dev.serial]["last_ring"] = client.get_last_ring(dev.serial)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning("ring history fetch failed for %s: %s", dev.serial, err)
+                try:
+                    status[dev.serial]["work_status"] = client.get_work_status(dev.serial)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning("work status fetch failed for %s: %s", dev.serial, err)
+                try:
+                    status[dev.serial]["operation_time"] = client.get_operation_time(dev.serial)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning("operation time fetch failed for %s: %s", dev.serial, err)
         return status
 
     async def _poll_status() -> dict[str, dict]:
