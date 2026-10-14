@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.11.0](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.8...v0.11.0) (2026-10-14)
+
+
+### Features
+
+* doorbell event, last ring and station status sensors ([3f92eb4](https://github.com/rtammekivi/hikconnect_intercom/commit/3f92eb430ff71c79c0c2a7d8c34742de39ff1c56))
+
+
+### Bug Fixes
+
+* always write doorbell entity state on coordinator updates ([4d08ddb](https://github.com/rtammekivi/hikconnect_intercom/commit/4d08ddb163cd427c740e9545a878148aba3a66c1))
+* call controls, push and ring history parity with the Hik-Connect app ([ab32b94](https://github.com/rtammekivi/hikconnect_intercom/commit/ab32b941d37f058921969d3d145e88095ab80d3d))
+* **call:** merge reject into hang up and send callSignal exactly like the app ([173d7b1](https://github.com/rtammekivi/hikconnect_intercom/commit/173d7b1d92c9b1c46199b5fe347d208b15f31227))
+* **call:** send answer/reject/hang-up the way the Hik-Connect app does ([05c27ea](https://github.com/rtammekivi/hikconnect_intercom/commit/05c27ea1a96486d9525bdc19d81d7ae1d45b0491))
+* **call:** track answer/hang-up locally and correct last ring for the station clock ([127bf76](https://github.com/rtammekivi/hikconnect_intercom/commit/127bf7624030609f8b6975960badfd774f91d0e6))
+* drop stale call polls before publishing and refresh cached calling status ([3a4131d](https://github.com/rtammekivi/hikconnect_intercom/commit/3a4131d41060a5b9d56077e47dbbe60dff3dfecd))
+* ignore local call status in doorbell edge detection and request XML operation time ([0f8fb28](https://github.com/rtammekivi/hikconnect_intercom/commit/0f8fb28dd012126f2c0d7e335a2a3f1967343f17))
+* keep doorbell state across failed polls and restore last ring time per message ([93b1774](https://github.com/rtammekivi/hikconnect_intercom/commit/93b17747ed4995f712b12dd37c7a02de83a7d910))
+* only drop call polls older than a button press and keep the last known ring ([11d9e71](https://github.com/rtammekivi/hikconnect_intercom/commit/11d9e719c9c17fce476a445da8a549cdfea2dce9))
+* **push:** fall back to the ezvizlife push host and keep MQTT alive ([01c3502](https://github.com/rtammekivi/hikconnect_intercom/commit/01c350299b81eb7acd8c77902825cb1eb6031299))
+* retry last ring clock correction when the station time is unavailable ([69910e9](https://github.com/rtammekivi/hikconnect_intercom/commit/69910e90e5ac4ce124e9c8d3b3593cccc4abae0e))
+
 ## [0.10.8](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.7...v0.10.8) (2026-10-13)
 
 
