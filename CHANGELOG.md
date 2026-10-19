@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.11.1...v0.11.2) (2026-10-19)
+
+
+### Bug Fixes
+
+* **cas:** normalize CAS port to integer for Russian endpoint ([#26](https://github.com/rtammekivi/hikconnect_intercom/issues/26)) ([5a5ad02](https://github.com/rtammekivi/hikconnect_intercom/commit/5a5ad02092dca160ebb225e4037efe2090a89721))
+
 ## [0.11.1](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.11.0...v0.11.1) (2026-10-19)
 
 
