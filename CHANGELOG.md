@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.1](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.11.0...v0.11.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **cas:** handle Russian CAS hostname mismatch with certificate pinning ([fff4872](https://github.com/rtammekivi/hikconnect_intercom/commit/fff48728379e8bc7c1cea849fd589b6f793a12de))
+* **cas:** pin legacy Russian CAS certificate for hostname mismatch ([7a135d5](https://github.com/rtammekivi/hikconnect_intercom/commit/7a135d5c6bb6a13867f5bb224bf3874c95ebd183))
+
 ## [0.11.0](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.10.8...v0.11.0) (2026-10-14)
 
 
