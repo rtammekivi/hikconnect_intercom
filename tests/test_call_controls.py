@@ -160,6 +160,88 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class CallingDoorTests(unittest.TestCase):
+    @staticmethod
+    def _status(call_status, dev_no=0, dev_type=1):
+        info = {"devNo": dev_no, "devType": dev_type, "lockNum": 1}
+        return {"meta": {"code": 200}, "data": json.dumps({"callStatus": call_status, "callerInfo": info})}
+
+    def test_maps_dev_no_to_channel(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=1))
+        self.assertEqual(client.calling_door("S1"), 2)
+        client._get.return_value = self._status(3, dev_no=0)
+        self.assertEqual(client.calling_door("S1"), 1)
+
+    def test_remembers_caller_after_call_ends(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=1))
+        client.get_call_status("S1")
+        seen_at = client._last_callers["S1"][0]
+        client.get_last_ring = Mock(return_value={"time": (seen_at - 5) * 1000})
+        client._get.return_value = self._status(1, dev_no=0, dev_type=-1)
+        self.assertEqual(client.calling_door("S1"), 2)
+        first_seen, _, info = client._last_callers["S1"]
+        client._last_callers["S1"] = (first_seen - 600, seen_at - 200, info)
+        client.get_last_ring.return_value = {"time": (first_seen - 605) * 1000}
+        self.assertEqual(client.calling_door("S1"), 2)
+        client._last_callers["S1"] = (first_seen - 600, seen_at - 301, info)
+        self.assertIsNone(client.calling_door("S1"))
+
+    def test_newer_ring_hides_previous_caller(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=1))
+        client.get_call_status("S1")
+        seen_at = client._last_callers["S1"][0]
+        client.get_last_ring = Mock(return_value={"time": (seen_at + 30) * 1000})
+        client._get.return_value = self._status(1, dev_no=0, dev_type=-1)
+        self.assertIsNone(client.calling_door("S1"))
+
+    def test_ring_after_first_sighting_is_refused(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=1))
+        client.get_call_status("S1")
+        first_seen = client._last_callers["S1"][0]
+        client.get_call_status("S1")
+        self.assertEqual(client._last_callers["S1"][0], first_seen)
+        client.get_last_ring = Mock(return_value={"time": (first_seen + 1) * 1000})
+        client._get.return_value = self._status(1, dev_no=0, dev_type=-1)
+        self.assertIsNone(client.calling_door("S1"))
+
+    def test_new_caller_without_idle_poll_resets_first_sighting(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=0))
+        client.get_call_status("S1")
+        client._last_callers["S1"] = (0.0, 0.0, client._last_callers["S1"][2])
+        client._get.return_value = self._status(2, dev_no=1)
+        client.get_call_status("S1")
+        self.assertGreater(client._last_callers["S1"][0], 0.0)
+
+    def test_unidentified_call_clears_previous_caller(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=1))
+        client.get_call_status("S1")
+        client._get.return_value = self._status(2, dev_no=0, dev_type=-1)
+        client.get_call_status("S1")
+        client.get_last_ring = Mock(return_value=None)
+        client._get.return_value = self._status(1, dev_no=0, dev_type=-1)
+        self.assertIsNone(client.calling_door("S1"))
+
+    def test_unclear_status_does_not_use_previous_caller(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(2, dev_no=0))
+        client.get_call_status("S1")
+        client._get.return_value = {"meta": {"code": 500}}
+        self.assertIsNone(client.calling_door("S1"))
+        client._get.return_value = self._status(2, dev_no=0, dev_type=-1)
+        self.assertIsNone(client.calling_door("S1"))
+
+    def test_no_call_seen(self):
+        client = _client()
+        client._get = Mock(return_value=self._status(1, dev_no=0, dev_type=-1))
+        self.assertIsNone(client.calling_door("S1"))
+
+
 class DoorbellEventTests(unittest.TestCase):
     def _fire(self, updates):
         coordinator = SimpleNamespace(data={"S1": {"status": "idle"}})
