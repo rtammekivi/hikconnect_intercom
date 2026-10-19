@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import datetime as dt
 from io import BytesIO
 import ipaddress
@@ -42,6 +43,16 @@ CAS_TLS_CIPHERS = (
 )
 CAS_CERT_HAS_EXPIRED_VERIFY_CODE = 10
 CAS_CA_BUNDLE = Path(__file__).with_name("cas_ca_bundle.pem")
+
+# The Russian CAS endpoint currently presents an expired *.ezvizlife.com leaf
+# certificate instead of one issued for cas.ezvizru.com. Never bypass standard
+# TLS checks on other hosts/ports. This pin must be reviewed if the vendor
+# replaces the certificate; do not silently accept a new peer.
+RUSSIA_CAS_HOST = "cas.ezvizru.com"
+RUSSIA_CAS_PORT = 6500
+RUSSIA_CAS_CERT_SHA256 = (
+    "234e9cde3a0c2a77d93023f0e4611c10231877c77c007c4efb92ab2d15408424"
+)
 
 
 @dataclass(frozen=True)
@@ -134,6 +145,30 @@ def _is_certificate_expired_error(err: ssl.SSLCertVerificationError) -> bool:
         return True
     verify_message = str(getattr(err, "verify_message", "") or err)
     return "certificate has expired" in verify_message.lower()
+
+
+def _is_certificate_hostname_mismatch_error(err: ssl.SSLCertVerificationError) -> bool:
+    """Return True only for a TLS certificate hostname mismatch."""
+    return (
+        getattr(err, "verify_code", None) == 62
+        or "hostname mismatch" in str(
+            getattr(err, "verify_message", "") or err
+        ).lower()
+    )
+
+
+def _is_russia_cas_endpoint(host: str, port: int) -> bool:
+    """Only the known Russian CAS endpoint may use the certificate pin."""
+    return host.lower() == RUSSIA_CAS_HOST and port == RUSSIA_CAS_PORT
+
+
+def _verify_russia_cas_certificate(sock: ssl.SSLSocket) -> None:
+    """Authenticate the exact legacy Russian CAS peer after TLS fallback."""
+    cert_der = sock.getpeercert(binary_form=True)
+    if not cert_der:
+        raise PyEzvizError("CAS TLS peer did not present a certificate")
+    if hashlib.sha256(cert_der).hexdigest() != RUSSIA_CAS_CERT_SHA256:
+        raise PyEzvizError("CAS TLS pinned certificate mismatch for Russian CAS")
 
 
 def _certificate_not_valid_after(cert: x509.Certificate) -> dt.datetime:
@@ -472,19 +507,26 @@ class EzvizCAS:
                         server_hostname=host,
                     )
                 except ssl.SSLCertVerificationError as err:
-                    if self._verify_tls_certificate or not _is_certificate_expired_error(
-                        err
-                    ):
+                    russia_cas = _is_russia_cas_endpoint(host, port)
+                    allow_fallback = _is_certificate_expired_error(err) or (
+                        russia_cas and _is_certificate_hostname_mismatch_error(err)
+                    )
+                    if self._verify_tls_certificate or not allow_fallback:
                         raise
                     sock.close()
                     sock = socket.create_connection((host, port))
                     if hasattr(sock, "settimeout"):
                         sock.settimeout(CAS_SOCKET_TIMEOUT)
+                    # The unverified TLS context is ONLY safe after an explicit
+                    # peer check below; do not send CAS payload before it passes.
                     sock = _cas_tls_context(verify_certificate=False).wrap_socket(
                         sock,
                         server_hostname=host,
                     )
-                    _verify_expired_cas_certificate_hostname(sock, host=host)
+                    if russia_cas:
+                        _verify_russia_cas_certificate(sock)
+                    else:
+                        _verify_expired_cas_certificate_hostname(sock, host=host)
                 if hasattr(sock, "settimeout"):
                     sock.settimeout(CAS_SOCKET_TIMEOUT)
 
