@@ -18,6 +18,31 @@ def _verify_error(message, code=None):
     return err
 
 
+class RussiaCasPortTests(unittest.TestCase):
+    def test_cloud_address_normalizes_port_from_hik_connect_sysconf(self):
+        # HikConnectClient populates sysConf using str.split("|"), so the
+        # actual API response contains port "6500", not integer 6500.
+        token = {
+            "service_urls": {
+                "sysConf": {15: "cas.ezvizru.com", 16: "6500"}
+            }
+        }
+        client = cas.EzvizCAS(token)
+        host, port = client._cloud_address()
+        self.assertEqual((host, port), ("cas.ezvizru.com", 6500))
+        self.assertIsInstance(port, int)
+        self.assertTrue(cas._is_russia_cas_endpoint(host, port))
+
+    def test_cloud_address_preserves_numeric_port(self):
+        token = {
+            "service_urls": {
+                "sysConf": {15: "cas.ezvizru.com", 16: 6500}
+            }
+        }
+        client = cas.EzvizCAS(token)
+        self.assertEqual(client._cloud_address(), ("cas.ezvizru.com", 6500))
+
+
 class RussiaCasCertificateTests(unittest.TestCase):
     def test_only_known_host_and_port(self):
         self.assertTrue(cas._is_russia_cas_endpoint("cas.ezvizru.com", 6500))

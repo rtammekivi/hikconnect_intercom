@@ -471,7 +471,7 @@ class EzvizCAS:
     def _cloud_address(self) -> tuple[str, int]:
         """Return the configured CAS cloud endpoint."""
         host = cast(str, self._service_urls["sysConf"][15])
-        port = cast(int, self._service_urls["sysConf"][16])
+        port = int(self._service_urls["sysConf"][16])
         return host, port
 
     def _hardware_code(self) -> str:
