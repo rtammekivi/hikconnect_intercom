@@ -40,6 +40,10 @@ class HikConnectPush:
         self._feature_code = feature_code(account)
         self._client = None
         self.used_fallback_host = False
+        self._push_addr: str | None = None
+        self._client_id: str | None = None
+        self._session_id: str | None = None
+        self._username: str | None = None
 
     async def async_start(self) -> None:
         session = async_get_clientsession(self._hass)
@@ -56,12 +60,30 @@ class HikConnectPush:
             self.used_fallback_host = True
             client_id, broker = await self._register(session, push_addr)
         await self._start_push(session, push_addr, client_id, session_id, username)
+        self._push_addr, self._client_id = push_addr, client_id
+        self._session_id, self._username = session_id, username
         await self._hass.async_add_executor_job(self._connect, broker, client_id)
         _LOGGER.info("Hik-Connect push listener started (broker=%s)", broker)
 
     async def async_stop(self) -> None:
         if self._client is not None:
             await self._hass.async_add_executor_job(self._disconnect)
+        client_id, self._client_id = self._client_id, None
+        if client_id is not None:
+            await self._stop_push(async_get_clientsession(self._hass), client_id)
+
+    async def async_refresh_session(self) -> None:
+        if self._client_id is None:
+            return
+        session = async_get_clientsession(self._hass)
+        try:
+            _, session_id, username = await self._login(session)
+            await self._start_push(session, self._push_addr, self._client_id, session_id, username)
+        except (aiohttp.ClientError, HikConnectError, KeyError, ValueError) as err:
+            _LOGGER.warning("Hik-Connect push session refresh failed: %s", err)
+            return
+        self._session_id, self._username = session_id, username
+        _LOGGER.debug("Hik-Connect push session refreshed")
 
     async def _login(self, session):
         data = {
@@ -116,6 +138,22 @@ class HikConnectPush:
             j = await r.json()
         if j.get("status") != 200:
             _LOGGER.warning("Hik-Connect push/start returned %s", j)
+
+    async def _stop_push(self, session, client_id):
+        data = {
+            "appKey": MQTT_APP_KEY, "clientId": client_id, "clientType": 5,
+            "sessionId": self._session_id, "username": self._username,
+        }
+        try:
+            async with session.post(
+                f"https://{self._push_addr}/api/push/stop", data=data,
+                allow_redirects=False, timeout=aiohttp.ClientTimeout(total=5),
+            ) as r:
+                j = await r.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+            _LOGGER.debug("Hik-Connect push/stop failed: %s", err)
+            return
+        _LOGGER.debug("Hik-Connect push/stop for %s returned %s", client_id, j)
 
     def _connect(self, broker, client_id):
         tail = broker.split("://")[-1]

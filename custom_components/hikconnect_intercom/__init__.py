@@ -187,6 +187,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as err:  # noqa: BLE001 - never fail setup on push
         _LOGGER.warning("Hik-Connect push listener failed to start: %s", err)
         push = None
+    else:
+        async def _stop_push(_event) -> None:
+            await push.async_stop()
+
+        entry.async_on_unload(
+            client.add_login_listener(lambda: hass.add_job(push.async_refresh_session))
+        )
+        entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop_push))
 
     longlink = None
     if push is None or push.used_fallback_host:
