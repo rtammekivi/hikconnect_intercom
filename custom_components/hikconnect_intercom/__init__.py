@@ -171,15 +171,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     # Realtime push: a call event just triggers an immediate authoritative poll.
-    unsubs = []
-    for dev in devices:
-        unsubs.append(
-            async_dispatcher_connect(
-                hass,
-                call_signal(dev.serial),
-                lambda *_: hass.async_create_task(coordinator.async_request_refresh()),
-            )
-        )
+    async def _on_call_push(*_) -> None:
+        await coordinator.async_request_refresh()
+
+    unsubs = [
+        async_dispatcher_connect(hass, call_signal(dev.serial), _on_call_push)
+        for dev in devices
+    ]
 
     push = HikConnectPush(
         hass, client._base, entry.data[CONF_ACCOUNT], entry.data[CONF_PASSWORD]
