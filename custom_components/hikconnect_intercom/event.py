@@ -52,6 +52,6 @@ class HikDoorbellEvent(CoordinatorEntity, EventEntity):
             self._last_status = status
         elif status not in (None, "unknown") and data.get("polled_at", self._local_at) >= self._local_at:
             if status == "ringing" and self._last_status != "ringing":
-                self._trigger_event("ring")
+                self._trigger_event("ring", dict(data.get("info") or {}))
             self._last_status = status
         super()._handle_coordinator_update()

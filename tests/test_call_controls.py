@@ -191,6 +191,15 @@ class DoorbellEventTests(unittest.TestCase):
         ]
         self.assertEqual(self._fire(updates), 2)
 
+    def test_ring_carries_caller_info(self):
+        coordinator = SimpleNamespace(data={"S1": {"status": "idle"}})
+        entity = load_event().HikDoorbellEvent(coordinator, "S1")
+        entity._trigger_event = Mock()
+        caller = {"buildingNo": 8, "unitNo": 1, "devNo": 1, "devType": 1}
+        coordinator.data = {"S1": {"status": "ringing", "info": caller}}
+        entity._handle_coordinator_update()
+        entity._trigger_event.assert_called_once_with("ring", caller)
+
     def test_failed_poll_does_not_ring_again(self):
         updates = [{"status": "ringing"}, {"status": "unknown"}, {"status": "ringing"}]
         self.assertEqual(self._fire(updates), 1)

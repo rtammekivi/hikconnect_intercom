@@ -96,8 +96,23 @@ can still prevent a third channel from opening.
   (config; sets the station clock to HA's DST-aware local time via ISAPI).
 - **Call status sensor** — `idle` / `ringing` / `call in progress`. State comes
   from the authoritative cloud poll; a realtime MQTT push event triggers an
-  immediate re-poll so ringing shows in near real time.
-- **Doorbell event** — fires `ring` when the call status turns to ringing.
+  immediate re-poll so ringing shows in near real time. Its attributes hold
+  the latest caller's `callerInfo` (`buildingNo`, `floorNo`,
+  `zoneNo`, `unitNo`, `devNo`, `devType`, `lockNum`).
+- **Doorbell event** — fires `ring` when the call status turns to ringing, with
+  the same `callerInfo` fields as event attributes, so rings can be routed per
+  door. On a single-unit setup `devNo` is `0` for the main door station and `1`+
+  for sub stations; in a multi-door building, ring each door once and check
+  which fields differ:
+
+  ```yaml
+  triggers:
+    - trigger: state
+      entity_id: event.indoor_station_doorbell
+  conditions:
+    - condition: template
+      value_template: "{{ trigger.to_state.attributes.devNo == 1 }}"
+  ```
 - **Last ring sensor** — timestamp of the latest ring from the account's
   message history (`/v3/unifiedmsg/list`).
 - **Volume numbers** — Ringtone / Two-way audio / Microphone (0-10), via the
