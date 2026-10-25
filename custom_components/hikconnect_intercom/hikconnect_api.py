@@ -10,6 +10,7 @@ IP), and a token shaped the way `EzvizCAS` expects.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import re
@@ -623,9 +624,13 @@ class HikConnectClient:
 
     @staticmethod
     def _clean_ip(value: str | None) -> str | None:
-        if not value or value in ("0.0.0.0", ""):
+        try:
+            ip = ipaddress.IPv4Address(str(value).strip())
+        except ValueError:
             return None
-        return value
+        if ip.is_unspecified or ip.is_reserved or ip.is_multicast or ip.is_loopback:
+            return None
+        return str(ip)
 
     @staticmethod
     def _parse_support_isapi(support_ext: Any) -> bool:
