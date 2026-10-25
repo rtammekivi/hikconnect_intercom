@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.11.2...v0.12.0) (2026-10-25)
+
+
+### Features
+
+* **config:** make the call-status poll interval configurable ([#31](https://github.com/rtammekivi/hikconnect_intercom/issues/31)) ([d640a2c](https://github.com/rtammekivi/hikconnect_intercom/commit/d640a2c438fea541a50a387fb5fab218797ce413))
+
 ## [0.11.2](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.11.1...v0.11.2) (2026-10-19)
 
 
