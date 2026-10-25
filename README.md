@@ -63,6 +63,10 @@ cover DST + Do-Not-Disturb.
 A camera entity is created for each LAN-reachable device. Live view uses MJPEG
 (codec-agnostic, low-latency, no go2rtc required); snapshots work too.
 
+The integration's **Configure** button sets the call-status poll interval
+(default 10 s, 3–60 s). Realtime push normally reports rings right away; a
+shorter interval only matters when push is unavailable.
+
 ## Recorder video
 
 The local decoder also supports encrypted H.264/H.265 recorder channels, tested

@@ -5,8 +5,17 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -14,12 +23,16 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    CALL_POLL_INTERVAL,
     CONF_ACCOUNT,
     CONF_BASE_URL,
+    CONF_CALL_POLL_INTERVAL,
     CONF_PASSWORD,
     CONF_SERVER,
     DEFAULT_BASE_URL,
     DOMAIN,
+    MAX_CALL_POLL_INTERVAL,
+    MIN_CALL_POLL_INTERVAL,
     SERVER_CUSTOM,
     SERVERS,
 )
@@ -68,6 +81,11 @@ class HikConnectLocalConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle the Hik-Connect account login."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        return HikConnectOptionsFlow()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -147,4 +165,33 @@ class HikConnectLocalConfigFlow(ConfigFlow, domain=DOMAIN):
                 password_optional=True,
             ),
             errors=errors,
+        )
+
+
+class HikConnectOptionsFlow(OptionsFlow):
+    """Tune polling for an existing entry."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(
+                data={CONF_CALL_POLL_INTERVAL: int(user_input[CONF_CALL_POLL_INTERVAL])}
+            )
+        current = self.config_entry.options.get(CONF_CALL_POLL_INTERVAL, CALL_POLL_INTERVAL)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_CALL_POLL_INTERVAL, default=current): NumberSelector(
+                        NumberSelectorConfig(
+                            min=MIN_CALL_POLL_INTERVAL,
+                            max=MAX_CALL_POLL_INTERVAL,
+                            step=1,
+                            unit_of_measurement="s",
+                            mode=NumberSelectorMode.BOX,
+                        )
+                    ),
+                }
+            ),
         )
