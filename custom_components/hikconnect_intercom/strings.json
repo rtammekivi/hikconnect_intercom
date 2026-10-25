@@ -40,5 +40,18 @@
       "account_mismatch": "The account must match the one this integration was set up with. To use a different account, add a new integration.",
       "reconfigure_successful": "Server updated."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hik-Connect Intercom options",
+        "data": {
+          "call_poll_interval": "Call status poll interval"
+        },
+        "data_description": {
+          "call_poll_interval": "Seconds between cloud call-status polls. Realtime push already reports rings immediately; a shorter interval only helps when push is unavailable, at the cost of more cloud requests."
+        }
+      }
+    }
   }
 }

@@ -18,6 +18,7 @@ from .const import (
     CALL_POLL_INTERVAL,
     CONF_ACCOUNT,
     CONF_BASE_URL,
+    CONF_CALL_POLL_INTERVAL,
     CONF_PASSWORD,
     DEFAULT_BASE_URL,
     DOMAIN,
@@ -39,6 +40,10 @@ PLATFORMS = [
     Platform.NUMBER,
     Platform.SWITCH,
 ]
+
+
+def _call_poll_interval(entry: ConfigEntry) -> timedelta:
+    return timedelta(seconds=entry.options.get(CONF_CALL_POLL_INTERVAL, CALL_POLL_INTERVAL))
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -97,9 +102,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER,
         name=f"{DOMAIN}_call_status",
         update_method=_poll_call_status,
-        update_interval=timedelta(seconds=CALL_POLL_INTERVAL),
+        update_interval=_call_poll_interval(entry),
     )
     await coordinator.async_config_entry_first_refresh()
+
+    async def _options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+        coordinator.update_interval = _call_poll_interval(entry)
+
+    entry.async_on_unload(entry.add_update_listener(_options_updated))
 
     def _status_work() -> dict[str, dict]:
         try:
