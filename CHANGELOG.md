@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.12.0...v0.13.0) (2026-10-26)
+
+
+### Features
+
+* **event:** include caller details in doorbell ring events ([#30](https://github.com/rtammekivi/hikconnect_intercom/issues/30)) ([efb1a4b](https://github.com/rtammekivi/hikconnect_intercom/commit/efb1a4b7f623c2ac73c7ba1558e130bc3e3f02dd))
+
 ## [0.12.0](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.11.2...v0.12.0) (2026-10-25)
 
 
