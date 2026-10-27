@@ -75,3 +75,17 @@ def load_event():
         modules[name] = module
     with patch.dict(sys.modules, modules):
         return load_module("event")
+
+
+def load_longlink():
+    interfaces = {
+        "homeassistant.core": {"HomeAssistant": object},
+        "homeassistant.helpers.storage": {"Store": object},
+    }
+    modules = {}
+    for name, attributes in interfaces.items():
+        module = ModuleType(name)
+        module.__dict__.update(attributes)
+        modules[name] = module
+    with patch.dict(sys.modules, modules):
+        return load_module("longlink")

@@ -99,7 +99,8 @@ can still prevent a third channel from opening.
   *Unlock all doors* (opens every lock-capable channel at once), and *Sync time*
   (config; sets the station clock to HA's DST-aware local time via ISAPI).
 - **Call status sensor** — `idle` / `ringing` / `call in progress`. State comes
-  from the authoritative cloud poll; a realtime MQTT push event triggers an
+  from the authoritative cloud poll; a realtime push event (the Hik-Connect
+  app's channel-99 long link, or the older EZVIZ MQTT push) triggers an
   immediate re-poll so ringing shows in near real time. Its attributes hold
   the latest caller's `callerInfo` (`buildingNo`, `floorNo`,
   `zoneNo`, `unitNo`, `devNo`, `devType`, `lockNum`).
@@ -153,7 +154,8 @@ Built on the shoulders of others — thank you:
 - **[albrzmr/ezviz_hp7](https://github.com/albrzmr/ezviz_hp7)** — original
   reverse-engineering of the CPD7 LAN streaming protocol.
 - **[RenierM26/pyEzvizApi](https://github.com/RenierM26/pyEzvizApi)** — the EZVIZ
-  CAS client (vendored as `lib/cas.py`) and the EZVIZ MQTT push protocol used for
+  CAS client (vendored as `lib/cas.py`), the channel-99 long-link push client
+  (vendored as `lib/longlink/`) and the EZVIZ MQTT push protocol used for
   realtime call events.
 - **[tomasbedrich/home-assistant-hikconnect](https://github.com/tomasbedrich/home-assistant-hikconnect)**
   and its `hikconnect` library — the original Hik-Connect HA integration; the

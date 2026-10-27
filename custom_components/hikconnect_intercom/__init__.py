@@ -7,11 +7,12 @@ import time
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -26,6 +27,7 @@ from .const import (
     call_signal,
 )
 from .hikconnect_api import HikConnectAuthError, HikConnectClient, HikConnectError
+from .longlink import HikConnectLongLink
 from .push import HikConnectPush
 
 _LOGGER = logging.getLogger(__name__)
@@ -188,6 +190,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.warning("Hik-Connect push listener failed to start: %s", err)
         push = None
 
+    longlink = HikConnectLongLink(
+        hass,
+        Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.longlink", private=True),
+        entry.data[CONF_ACCOUNT],
+        entry.data[CONF_PASSWORD],
+        client._base,
+        lambda: hass.add_job(coordinator.async_request_refresh),
+    )
+    try:
+        await longlink.async_start()
+    except Exception as err:  # noqa: BLE001 - never fail setup on push
+        _LOGGER.warning("Hik-Connect long-link push failed to start: %s", err)
+        longlink = None
+    else:
+        async def _stop_longlink(_event) -> None:
+            await longlink.async_stop()
+
+        entry.async_on_unload(
+            hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop_longlink)
+        )
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "client": client,
         "devices": devices,
@@ -195,6 +218,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
         "status_coordinator": status_coordinator,
         "push": push,
+        "longlink": longlink,
         "unsubs": unsubs,
         "quality": {},  # (serial_chN -> MAIN|SUB), shared: select writes, camera reads
     }
@@ -212,4 +236,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             push = data.get("push")
             if push is not None:
                 await push.async_stop()
+            longlink = data.get("longlink")
+            if longlink is not None:
+                await longlink.async_stop()
     return unload_ok
