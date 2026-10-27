@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.14.0...v0.14.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* handle call push on the event loop, keep push registered, reject garbled LAN IPs ([#29](https://github.com/rtammekivi/hikconnect_intercom/issues/29)) ([c34014c](https://github.com/rtammekivi/hikconnect_intercom/commit/c34014c4427076f9cbd801ce91b5a62f8394eca8))
+
 ## [0.14.0](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.13.0...v0.14.0) (2026-10-27)
 
 
