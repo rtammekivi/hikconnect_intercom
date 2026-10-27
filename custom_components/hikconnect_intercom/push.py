@@ -39,6 +39,7 @@ class HikConnectPush:
         self._password = password
         self._feature_code = feature_code(account)
         self._client = None
+        self.used_fallback_host = False
 
     async def async_start(self) -> None:
         session = async_get_clientsession(self._hass)
@@ -52,6 +53,7 @@ class HikConnectPush:
                 raise
             _LOGGER.debug("push register on %s failed (%s), using %s", push_addr, err, fallback)
             push_addr = fallback
+            self.used_fallback_host = True
             client_id, broker = await self._register(session, push_addr)
         await self._start_push(session, push_addr, client_id, session_id, username)
         await self._hass.async_add_executor_job(self._connect, broker, client_id)

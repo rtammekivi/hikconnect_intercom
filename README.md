@@ -99,9 +99,10 @@ can still prevent a third channel from opening.
   *Unlock all doors* (opens every lock-capable channel at once), and *Sync time*
   (config; sets the station clock to HA's DST-aware local time via ISAPI).
 - **Call status sensor** — `idle` / `ringing` / `call in progress`. State comes
-  from the authoritative cloud poll; a realtime push event (the Hik-Connect
-  app's channel-99 long link, or the older EZVIZ MQTT push) triggers an
-  immediate re-poll so ringing shows in near real time. Its attributes hold
+  from the authoritative cloud poll; a realtime push event (the EZVIZ MQTT
+  push, or the Hik-Connect app's channel-99 long link where the region's push
+  host no longer serves MQTT registration, e.g. EU) triggers an immediate
+  re-poll so ringing shows in near real time. Its attributes hold
   the latest caller's `callerInfo` (`buildingNo`, `floorNo`,
   `zoneNo`, `unitNo`, `devNo`, `devType`, `lockNum`).
 - **Doorbell event** — fires `ring` when the call status turns to ringing, with
