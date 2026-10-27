@@ -110,6 +110,7 @@ class HikConnectClient:
         self._last_rings: dict[str, dict] = {}
         self._last_callers: dict[str, tuple[float, float, dict]] = {}
         self._in_call: dict[str, bool] = {}
+        self._caller_channels: dict[str, dict[int, int]] = {}
 
     # -- auth -------------------------------------------------------------
     def login(self) -> None:
@@ -384,7 +385,14 @@ class HikConnectClient:
         else:
             return None
         dev_no = info.get("devNo")
-        return dev_no + 1 if isinstance(dev_no, int) else None
+        if not isinstance(dev_no, int):
+            return None
+        return self._caller_channels.get(serial, {}).get(dev_no, dev_no + 1)
+
+    def remember_caller_channel(self, serial: str, caller: dict) -> None:
+        dev_no, channel = caller.get("devNo"), caller.get("channelno")
+        if isinstance(dev_no, int) and isinstance(channel, int):
+            self._caller_channels.setdefault(serial, {})[dev_no] = channel
 
     # -- ISAPI over the cloud passthrough ---------------------------------
     def isapi(self, serial: str, method: str, path: str, body: str = "") -> dict:

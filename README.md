@@ -98,20 +98,24 @@ can still prevent a third channel from opening.
   the ISAPI `callSignal` command the app uses),
   *Unlock all doors* (opens every lock-capable channel at once), *Unlock calling
   door* (opens the door of the current call, or of a call that ended in the last
-  5 minutes), and *Sync time*
+  5 minutes; uses the exact channel from the long-link ring message once that
+  door has rung, otherwise assumes channel `devNo + 1`), and *Sync time*
   (config; sets the station clock to HA's DST-aware local time via ISAPI).
 - **Call status sensor** — `idle` / `ringing` / `call in progress`. State comes
   from the authoritative cloud poll; a realtime push event (the EZVIZ MQTT
   push, or the Hik-Connect app's channel-99 long link where the region's push
   host no longer serves MQTT registration, e.g. EU) triggers an immediate
-  re-poll so ringing shows in near real time. Its attributes hold
+  re-poll so ringing shows in near real time. A long-link ring or hang-up
+  message sets `ringing` / `idle` directly, without a poll. Its attributes hold
   the latest caller's `callerInfo` (`buildingNo`, `floorNo`,
   `zoneNo`, `unitNo`, `devNo`, `devType`, `lockNum`).
 - **Doorbell event** — fires `ring` when the call status turns to ringing, with
   the same `callerInfo` fields as event attributes, so rings can be routed per
   door. On a single-unit setup `devNo` is `0` for the main door station and `1`+
   for sub stations; in a multi-door building, ring each door once and check
-  which fields differ:
+  which fields differ. Rings that arrive over the long link fire straight from
+  the push and also carry `channelno`, the calling door's camera/lock channel,
+  and `caller`:
 
   ```yaml
   triggers:

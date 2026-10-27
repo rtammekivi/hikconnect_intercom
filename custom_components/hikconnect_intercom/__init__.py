@@ -95,7 +95,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         result = await hass.async_add_executor_job(work)
         for serial, polled in result.items():
             current = (coordinator.data or {}).get(serial) or {}
-            if current.get("local_at", 0.0) > polled["polled_at"]:
+            if max(current.get("local_at", 0.0), current.get("pushed_at", 0.0)) > polled["polled_at"]:
                 result[serial] = current
         return result
 
@@ -213,6 +213,19 @@ async def _async_start_longlink(
     hass: HomeAssistant, entry: ConfigEntry, client: HikConnectClient, coordinator
 ) -> HikConnectLongLink | None:
     @callback
+    def _rang(fields: list[str], caller: dict) -> None:
+        data = dict(coordinator.data or {})
+        serials = [serial for serial in data if serial in fields]
+        if not serials:
+            hass.async_create_task(coordinator.async_request_refresh())
+            return
+        now = time.monotonic()
+        for serial in serials:
+            client.remember_caller_channel(serial, caller)
+            data[serial] = {"status": "ringing", "info": caller, "polled_at": now, "pushed_at": now}
+        coordinator.async_set_updated_data(data)
+
+    @callback
     def _hung_up(fields: list[str]) -> None:
         data = dict(coordinator.data or {})
         serials = [serial for serial in data if serial in fields]
@@ -227,7 +240,7 @@ async def _async_start_longlink(
         entry.data[CONF_ACCOUNT],
         entry.data[CONF_PASSWORD],
         client._base,
-        lambda: hass.add_job(coordinator.async_request_refresh),
+        lambda fields, caller: hass.add_job(_rang, fields, caller),
         lambda fields: hass.add_job(_hung_up, fields),
     )
     try:

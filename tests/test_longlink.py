@@ -87,7 +87,7 @@ class StartTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.credentials_input(), "session-1")
         worker.return_value.start.assert_called_once_with()
         session.on_message(b'{"pushType":2,"soundType":2701,"alert":"Your doorbell is ringing"}')
-        on_ring.assert_called_once_with()
+        on_ring.assert_called_once_with([""], {})
 
 
 class MessageTests(unittest.TestCase):
@@ -105,11 +105,28 @@ class MessageTests(unittest.TestCase):
         on_ring.assert_not_called()
         on_hangup.assert_not_called()
         listener._on_message(b'{"pushType":2,"soundType":2701}')
-        on_ring.assert_called_once_with()
+        on_ring.assert_called_once_with([""], {})
         on_hangup.assert_not_called()
         listener._on_message(b'{"pushType":3,"alert":"hang up","ext":"3,20,2026-10-27 16:34:22,Q1,0,,2701,4"}')
         on_hangup.assert_called_once_with(["3", "20", "2026-10-27 16:34:22", "Q1", "0", "", "2701", "4"])
-        on_ring.assert_called_once_with()
+        on_ring.assert_called_once_with([""], {})
+
+    def test_ring_carries_the_calling_door(self):
+        on_ring = Mock()
+        listener = make_listener([], on_ring)
+        caller = (
+            "eyJkZXZUeXBlIjoxLCJoYW5kbGVyIjoiIiwiY2FsbGVyIjoiMS04LTEtMCIsInpvbmVObyI6MSwidW5pdE5vIjox"
+            "LCJjaGFubmVsbm8iOjEsImxvY2tOdW0iOjEsImJ1aWxkaW5nTm8iOjgsImRldk5vIjowLCJ2b2lwTm8iOiIwIiwi"
+            "Zmxvb3JObyI6MH0="
+        )
+        ext = f"14,2026-10-27 16:34:01,Q1,0,4,20261027163401-Q1-1-00000-1,1,,0,,0,,,DS-KH6320-WTE1,1-8-1-0,{caller}"
+        listener._on_message(('{"pushType":2,"soundType":2701,"ext":"%s"}' % ext).encode())
+        fields, info = on_ring.call_args.args
+        self.assertIn("Q1", fields)
+        self.assertEqual(info, {
+            "devType": 1, "caller": "1-8-1-0", "zoneNo": 1, "unitNo": 1, "channelno": 1,
+            "lockNum": 1, "buildingNo": 8, "devNo": 0, "voipNo": "0", "floorNo": 0,
+        })
 
 
 if __name__ == "__main__":

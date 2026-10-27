@@ -59,7 +59,7 @@ class HikConnectLongLink:
         account: str,
         password: str,
         base_url: str,
-        on_ring: Callable[[], None],
+        on_ring: Callable[[list[str], dict[str, Any]], None],
         on_hangup: Callable[[list[str]], None],
     ) -> None:
         self._hass = hass
@@ -151,7 +151,19 @@ class HikConnectLongLink:
             return
         if not isinstance(message, dict):
             return
+        fields = str(message.get("ext") or "").split(",")
         if message.get("pushType") == _PUSH_RING:
-            self._on_ring()
+            self._on_ring(fields, _caller_info(fields))
         elif message.get("pushType") == _PUSH_HANGUP:
-            self._on_hangup(str(message.get("ext") or "").split(","))
+            self._on_hangup(fields)
+
+
+def _caller_info(fields: list[str]) -> dict[str, Any]:
+    for field in reversed(fields):
+        try:
+            info = json.loads(base64.b64decode(field, validate=True))
+        except ValueError:
+            continue
+        if isinstance(info, dict) and "devNo" in info:
+            return {k: v for k, v in info.items() if k != "handler"}
+    return {}

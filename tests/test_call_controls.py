@@ -173,6 +173,17 @@ class CallingDoorTests(unittest.TestCase):
         client._get.return_value = self._status(3, dev_no=0)
         self.assertEqual(client.calling_door("S1"), 1)
 
+    def test_prefers_channel_learned_from_push(self):
+        client = _client()
+        client.remember_caller_channel("S1", {"devNo": 1, "channelno": 5})
+        client.remember_caller_channel("S1", {"devNo": 2, "channelno": "x"})
+        client._get = Mock(return_value=self._status(2, dev_no=1))
+        self.assertEqual(client.calling_door("S1"), 5)
+        client._get.return_value = self._status(2, dev_no=2)
+        self.assertEqual(client.calling_door("S1"), 3)
+        client._get.return_value = self._status(2, dev_no=1)
+        self.assertEqual(client.calling_door("S2"), 2)
+
     def test_remembers_caller_after_call_ends(self):
         client = _client()
         client._get = Mock(return_value=self._status(2, dev_no=1))
@@ -280,6 +291,21 @@ class DoorbellEventTests(unittest.TestCase):
         caller = {"buildingNo": 8, "unitNo": 1, "devNo": 1, "devType": 1}
         coordinator.data = {"S1": {"status": "ringing", "info": caller}}
         entity._handle_coordinator_update()
+        entity._trigger_event.assert_called_once_with("ring", caller)
+
+    def test_push_ring_fires_once_with_the_door(self):
+        coordinator = SimpleNamespace(data={"S1": {"status": "idle"}})
+        entity = load_event().HikDoorbellEvent(coordinator, "S1")
+        entity._trigger_event = Mock()
+        caller = {"devNo": 1, "channelno": 2, "devType": 1}
+        for data in (
+            {"status": "ringing", "info": caller, "polled_at": 5.0, "pushed_at": 5.0},
+            {"status": "ringing", "info": {"devNo": 1}, "polled_at": 6.0},
+            {"status": "idle", "info": caller, "polled_at": 5.0, "pushed_at": 5.0, "local_at": 7.0},
+            {"status": "idle", "info": {}, "polled_at": 8.0},
+        ):
+            coordinator.data = {"S1": data}
+            entity._handle_coordinator_update()
         entity._trigger_event.assert_called_once_with("ring", caller)
 
     def test_failed_poll_does_not_ring_again(self):
