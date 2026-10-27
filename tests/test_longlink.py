@@ -85,7 +85,25 @@ class StartTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.state, {"device_id": "aa"})
         self.assertEqual(session.credentials_input(), "session-1")
         worker.return_value.start.assert_called_once_with()
-        session.on_message(b"{}")
+        session.on_message(b'{"pushType":2,"soundType":2701,"alert":"Your doorbell is ringing"}')
+        on_event.assert_called_once_with()
+
+
+class MessageTests(unittest.TestCase):
+    def test_only_ring_messages_trigger_a_poll(self):
+        on_event = Mock()
+        listener = make_listener([], on_event)
+        for payload in (
+            b'{"pushType":3,"alert":"hang up","ext":"3,20,2026-10-27 16:34:22,Q1,0,,2701,4"}',
+            b'{"pushType":99}',
+            b"{}",
+            b"[]",
+            b"\x00\x01binary",
+        ):
+            with self.subTest(payload=payload):
+                listener._on_message(payload)
+        on_event.assert_not_called()
+        listener._on_message(b'{"pushType":2,"soundType":2701}')
         on_event.assert_called_once_with()
 
 

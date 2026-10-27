@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -34,6 +35,7 @@ _REGISTRATION = {
     "pushRegisterJson": '[{"channel":99}]',
     "pushExtJson": '{"language":"","protoVer":"2"}',
 }
+_PUSH_RING = 2
 _SESSION_MAX_AGE = 6 * 3600
 _SAVE_TIMEOUT = 30
 
@@ -140,4 +142,9 @@ class HikConnectLongLink:
 
     def _on_message(self, payload: bytes) -> None:
         _LOGGER.debug("Hik-Connect long-link message: %r", payload[:500])
-        self._on_event()
+        try:
+            message = json.loads(payload)
+        except ValueError:
+            return
+        if isinstance(message, dict) and message.get("pushType") == _PUSH_RING:
+            self._on_event()
