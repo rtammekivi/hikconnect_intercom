@@ -40,7 +40,7 @@ class HikStreamQualitySelect(SelectEntity, RestoreEntity):
     def __init__(self, cam, quality: dict[str, str]):
         self._cam = cam
         self._quality = quality
-        self._qkey = f"{cam.serial}_ch{cam.channel}"
+        self._qkey = f"{cam.serial}_ch{cam.slot}"
         self._attr_name = f"{cam.name} stream quality"
         self._attr_unique_id = f"{DOMAIN}_{self._qkey}_quality"
         self._attr_current_option = "HD"

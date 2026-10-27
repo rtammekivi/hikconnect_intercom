@@ -12,11 +12,13 @@ import logging
 from homeassistant.components.lock import LockEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
 
 from .const import DOMAIN, DOOR_LATCH_UNLOCKED_FOR
+from .doors import slot_for_channel
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,11 +33,19 @@ async def async_setup_entry(
     }
     entities = []
     for dev in data["devices"]:
+        pins = data["door_pins"].get(dev.serial, {})
+        slots = data["door_slots"].get(dev.serial)
         for channel, count in sorted(dev.locks.items()):
+            slot = channel if slots is None else slot_for_channel(channel, pins, slots)
+            if slot is None:
+                continue
             base = names.get((dev.serial, channel), f"Channel {channel}")
             for lock_index in range(count):
                 entities.append(
-                    HikLock(hass, client, dev.serial, channel, lock_index, base)
+                    HikLock(
+                        hass, client, dev.serial, channel, lock_index, base,
+                        slot, pins.get(slot),
+                    )
                 )
     async_add_entities(entities)
 
@@ -44,17 +54,20 @@ class HikLock(LockEntity):
     _attr_has_entity_name = True
     _attr_assumed_state = True
 
-    def __init__(self, hass, client, serial, channel, lock_index, base_name):
+    def __init__(
+        self, hass, client, serial, channel, lock_index, base_name, slot, door_ip
+    ):
         self.hass = hass
         self._client = client
         self._serial = serial
         self._channel = channel
         self._lock_index = lock_index
+        self._door_ip = door_ip
         name = f"{base_name} lock"
         if lock_index:
             name += f" {lock_index + 1}"
         self._attr_name = name
-        self._attr_unique_id = f"{DOMAIN}_{serial}_ch{channel}_lock{lock_index}"
+        self._attr_unique_id = f"{DOMAIN}_{serial}_ch{slot}_lock{lock_index}"
         self._attr_is_locked = True
 
     @property
@@ -65,10 +78,23 @@ class HikLock(LockEntity):
         self._attr_is_locked = True
         self.async_write_ha_state()
 
+    def _current_channel(self) -> int:
+        if self._door_ip is None:
+            return self._channel
+        try:
+            doors = self._client.get_door_stations(self._serial)
+        except Exception as err:  # noqa: BLE001
+            raise HomeAssistantError(f"Cannot confirm which door {self.name} is: {err}") from err
+        channels = [ch for ch, door in doors.items() if door["ip"] == self._door_ip]
+        if len(channels) != 1:
+            raise HomeAssistantError(f"Door station for {self.name} is not connected")
+        return channels[0]
+
     async def async_unlock(self, **kwargs) -> None:
-        await self.hass.async_add_executor_job(
-            self._client.unlock, self._serial, self._channel, self._lock_index
-        )
+        def work():
+            self._client.unlock(self._serial, self._current_channel(), self._lock_index)
+
+        await self.hass.async_add_executor_job(work)
         self._attr_is_locked = False
         self.async_write_ha_state()
 

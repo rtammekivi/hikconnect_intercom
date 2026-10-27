@@ -628,7 +628,7 @@ class HikLocalCamera(Camera):
         super().__init__()
         self.hass = hass
         self._cam = cam
-        self._qkey = f"{cam.serial}_ch{cam.channel}"
+        self._qkey = f"{cam.serial}_ch{cam.slot}"
         self._source = _ChannelStream(
             hass, client, cam, sem, quality, self._qkey, status, self._codec_seen
         )
@@ -637,7 +637,7 @@ class HikLocalCamera(Camera):
         self._token = secrets.token_urlsafe(32)
         self._attr_supported_features = self._features()
         self._attr_name = cam.name
-        self._attr_unique_id = f"{DOMAIN}_{cam.serial}_ch{cam.channel}"
+        self._attr_unique_id = f"{DOMAIN}_{cam.serial}_ch{cam.slot}"
 
     @property
     def device_info(self) -> DeviceInfo:

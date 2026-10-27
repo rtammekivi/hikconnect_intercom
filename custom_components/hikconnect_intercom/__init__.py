@@ -27,6 +27,7 @@ from .const import (
     call_signal,
     native_stream_mode,
 )
+from .doors import pin_doors, resolve_slots, slot_for_channel
 from .hikconnect_api import HikConnectAuthError, HikConnectClient, HikConnectError
 from .longlink import HikConnectLongLink
 from .push import HikConnectPush
@@ -60,18 +61,52 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         client.login()
         devices = client.get_devices()
         cams = []
+        doors = {}
         for dev in devices:
             if not dev.local_ip:
                 continue
             cams.extend(client.get_cameras(dev))
-        return devices, cams
+            try:
+                doors[dev.serial] = client.get_door_stations(dev.serial)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("door station list failed for %s: %s", dev.serial, err)
+        return devices, cams, doors
 
     try:
-        devices, cameras = await hass.async_add_executor_job(_login_and_enumerate)
+        devices, cameras, doors = await hass.async_add_executor_job(_login_and_enumerate)
     except HikConnectAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
     except Exception as err:  # noqa: BLE001
         raise ConfigEntryNotReady(f"Hik-Connect setup failed: {err}") from err
+
+    door_store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.doors")
+    stored = await door_store.async_load() or {}
+    door_pins = {
+        serial: {int(slot): ip for slot, ip in pinned.items()}
+        for serial, pinned in stored.items()
+    }
+    unresolved = [
+        dev.serial for dev in devices
+        if door_pins.get(dev.serial) and dev.serial not in doors
+    ]
+    if unresolved:
+        raise ConfigEntryNotReady(f"door stations unavailable for {', '.join(unresolved)}")
+    for serial, found in doors.items():
+        door_pins[serial] = pin_doors(door_pins.get(serial, {}), found)
+    await door_store.async_save(
+        {serial: {str(slot): ip for slot, ip in pinned.items()} for serial, pinned in door_pins.items()}
+    )
+    door_slots = {
+        serial: resolve_slots(door_pins[serial], found) for serial, found in doors.items()
+    }
+    bound = []
+    for cam in cameras:
+        if cam.serial in door_slots:
+            cam.slot = slot_for_channel(cam.channel, door_pins[cam.serial], door_slots[cam.serial])
+            if cam.slot is None:
+                continue
+        bound.append(cam)
+    cameras = bound
 
     _LOGGER.info(
         "Hik-Connect Intercom: %d device(s), %d camera channel(s)",
@@ -150,6 +185,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     status[dev.serial]["operation_time"] = client.get_operation_time(dev.serial)
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.warning("operation time fetch failed for %s: %s", dev.serial, err)
+            if dev.serial in door_slots:
+                try:
+                    status[dev.serial]["doors"] = client.get_door_stations(dev.serial)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug("door station list failed for %s: %s", dev.serial, err)
         return status
 
     async def _poll_status() -> dict[str, dict]:
@@ -163,6 +203,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_interval=timedelta(seconds=STATUS_POLL_INTERVAL),
     )
     await status_coordinator.async_config_entry_first_refresh()
+
+    @callback
+    def _doors_moved() -> None:
+        for serial, slots in door_slots.items():
+            found = ((status_coordinator.data or {}).get(serial) or {}).get("doors")
+            if found is None:
+                continue
+            pinned = door_pins[serial]
+            if pin_doors(pinned, found) != pinned or resolve_slots(pinned, found) != slots:
+                _LOGGER.warning("Door stations on %s moved channels; reloading", serial)
+                hass.config_entries.async_schedule_reload(entry.entry_id)
+                return
+
+    entry.async_on_unload(status_coordinator.async_add_listener(_doors_moved))
 
     registry = dr.async_get(hass)
     for device in devices:
@@ -209,6 +263,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "client": client,
         "devices": devices,
         "cameras": cameras,
+        "door_pins": door_pins,
+        "door_slots": door_slots,
         "coordinator": coordinator,
         "status_coordinator": status_coordinator,
         "push": push,
