@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.13.0...v0.14.0) (2026-10-27)
+
+
+### Features
+
+* realtime calls over the channel-99 long link and unlock calling door ([#34](https://github.com/rtammekivi/hikconnect_intercom/issues/34)) ([6589563](https://github.com/rtammekivi/hikconnect_intercom/commit/658956388b29d9d79818c846c066b7ac64f0d03e))
+
 ## [0.13.0](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.12.0...v0.13.0) (2026-10-26)
 
 
