@@ -35,6 +35,7 @@ _HEADERS = {"clientType": "55", "lang": "en-US"}
 _CALL_STATUS = {1: "idle", 2: "ringing", 3: "call in progress"}
 _RELOGIN_MIN_INTERVAL = 30.0
 _RELOGIN_MAX_INTERVAL = 900.0
+_CALLER_MEMORY = 300.0
 
 
 def feature_code(account: str) -> str:
@@ -107,6 +108,8 @@ class HikConnectClient:
         self._login_backoff = 0.0
         self._isapi_call_serials: set[str] = set()
         self._last_rings: dict[str, dict] = {}
+        self._last_callers: dict[str, tuple[float, float, dict]] = {}
+        self._in_call: dict[str, bool] = {}
 
     # -- auth -------------------------------------------------------------
     def login(self) -> None:
@@ -351,7 +354,37 @@ class HikConnectClient:
             return {"status": "unknown", "info": {}}
         data = json.loads(r["data"])
         status = _CALL_STATUS.get(data.get("callStatus"), "unknown")
-        return {"status": status, "info": data.get("callerInfo") or {}}
+        info = data.get("callerInfo") or {}
+        active = status in ("ringing", "call in progress")
+        if active:
+            previous = self._last_callers.get(serial)
+            now = datetime.now(timezone.utc).timestamp()
+            if info.get("devType", -1) == -1:
+                self._last_callers.pop(serial, None)
+            elif previous and self._in_call.get(serial) and previous[2].get("devNo") == info.get("devNo"):
+                self._last_callers[serial] = (previous[0], now, info)
+            else:
+                self._last_callers[serial] = (now, now, info)
+        if status != "unknown":
+            self._in_call[serial] = active
+        return {"status": status, "info": info}
+
+    def calling_door(self, serial: str) -> int | None:
+        current = self.get_call_status(serial)
+        if current["status"] in ("ringing", "call in progress"):
+            info = current["info"] if current["info"].get("devType", -1) != -1 else {}
+        elif current["status"] == "idle":
+            seen = self._last_callers.get(serial)
+            if seen is None or datetime.now(timezone.utc).timestamp() - seen[1] > _CALLER_MEMORY:
+                return None
+            ring = self.get_last_ring(serial)
+            if ring is None or ring["time"] / 1000 >= seen[0]:
+                return None
+            info = seen[2]
+        else:
+            return None
+        dev_no = info.get("devNo")
+        return dev_no + 1 if isinstance(dev_no, int) else None
 
     # -- ISAPI over the cloud passthrough ---------------------------------
     def isapi(self, serial: str, method: str, path: str, body: str = "") -> dict:

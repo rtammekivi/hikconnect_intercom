@@ -96,7 +96,9 @@ can still prevent a third channel from opening.
 - **Buttons** — *Answer call* and *Hang up call* (cloud call ops; hang up
   rejects a ringing call and ends an answered one; stations that support it get
   the ISAPI `callSignal` command the app uses),
-  *Unlock all doors* (opens every lock-capable channel at once), and *Sync time*
+  *Unlock all doors* (opens every lock-capable channel at once), *Unlock calling
+  door* (opens the door of the current call, or of a call that ended in the last
+  5 minutes), and *Sync time*
   (config; sets the station clock to HA's DST-aware local time via ISAPI).
 - **Call status sensor** — `idle` / `ringing` / `call in progress`. State comes
   from the authoritative cloud poll; a realtime push event (the EZVIZ MQTT
