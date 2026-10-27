@@ -60,7 +60,7 @@ class HikConnectLongLink:
         password: str,
         base_url: str,
         on_ring: Callable[[], None],
-        on_hangup: Callable[[], None],
+        on_hangup: Callable[[list[str]], None],
     ) -> None:
         self._hass = hass
         self._store = store
@@ -154,4 +154,4 @@ class HikConnectLongLink:
         if message.get("pushType") == _PUSH_RING:
             self._on_ring()
         elif message.get("pushType") == _PUSH_HANGUP:
-            self._on_hangup()
+            self._on_hangup(str(message.get("ext") or "").split(","))

@@ -12,7 +12,6 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -24,7 +23,6 @@ from .const import (
     CONF_PASSWORD,
     DEFAULT_BASE_URL,
     DOMAIN,
-    HANGUP_POLL_DELAY,
     STATUS_POLL_INTERVAL,
     call_signal,
 )
@@ -214,22 +212,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _async_start_longlink(
     hass: HomeAssistant, entry: ConfigEntry, client: HikConnectClient, coordinator
 ) -> HikConnectLongLink | None:
-    async def _poll(_now) -> None:
-        await coordinator.async_request_refresh()
-
-    cancel_pending: list = []
-
     @callback
-    def _poll_after_hangup() -> None:
-        _cancel_pending_poll()
-        cancel_pending.append(async_call_later(hass, HANGUP_POLL_DELAY, _poll))
-
-    @callback
-    def _cancel_pending_poll() -> None:
-        while cancel_pending:
-            cancel_pending.pop()()
-
-    entry.async_on_unload(_cancel_pending_poll)
+    def _hung_up(fields: list[str]) -> None:
+        data = dict(coordinator.data or {})
+        serials = [serial for serial in data if serial in fields]
+        for serial in serials:
+            data[serial] = {**data[serial], "status": "idle", "local_at": time.monotonic()}
+        if serials:
+            coordinator.async_set_updated_data(data)
 
     longlink = HikConnectLongLink(
         hass,
@@ -238,7 +228,7 @@ async def _async_start_longlink(
         entry.data[CONF_PASSWORD],
         client._base,
         lambda: hass.add_job(coordinator.async_request_refresh),
-        lambda: hass.add_job(_poll_after_hangup),
+        lambda fields: hass.add_job(_hung_up, fields),
     )
     try:
         await longlink.async_start()

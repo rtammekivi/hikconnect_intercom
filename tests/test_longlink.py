@@ -108,7 +108,7 @@ class MessageTests(unittest.TestCase):
         on_ring.assert_called_once_with()
         on_hangup.assert_not_called()
         listener._on_message(b'{"pushType":3,"alert":"hang up","ext":"3,20,2026-10-27 16:34:22,Q1,0,,2701,4"}')
-        on_hangup.assert_called_once_with()
+        on_hangup.assert_called_once_with(["3", "20", "2026-10-27 16:34:22", "Q1", "0", "", "2701", "4"])
         on_ring.assert_called_once_with()
 
 

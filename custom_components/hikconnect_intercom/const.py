@@ -34,7 +34,6 @@ CALL_POLL_INTERVAL = 10
 CONF_CALL_POLL_INTERVAL = "call_poll_interval"
 MIN_CALL_POLL_INTERVAL = 3
 MAX_CALL_POLL_INTERVAL = 60
-HANGUP_POLL_DELAY = 10
 
 # Device telemetry (online, wifi, firmware, disk) changes slowly — poll gently.
 STATUS_POLL_INTERVAL = 60
