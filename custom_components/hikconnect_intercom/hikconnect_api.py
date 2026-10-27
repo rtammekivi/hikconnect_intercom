@@ -10,6 +10,7 @@ IP), and a token shaped the way `EzvizCAS` expects.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import re
@@ -18,7 +19,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from time import monotonic
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote
 
 import requests
@@ -111,6 +112,7 @@ class HikConnectClient:
         self._last_callers: dict[str, tuple[float, float, dict]] = {}
         self._in_call: dict[str, bool] = {}
         self._caller_channels: dict[str, dict[int, int]] = {}
+        self._login_listeners: list[Callable[[], None]] = []
 
     # -- auth -------------------------------------------------------------
     def login(self) -> None:
@@ -135,6 +137,12 @@ class HikConnectClient:
         sci = self._raw("GET", "/v3/configurations/system/info")["systemConfigInfo"]
         self._sysconf = str(sci.get("sysConf", "")).split("|")
         _LOGGER.debug("Hik-Connect login ok user=%s base=%s", self._username, self._base)
+        for listener in list(self._login_listeners):
+            listener()
+
+    def add_login_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
+        self._login_listeners.append(listener)
+        return lambda: self._login_listeners.remove(listener)
 
     def _relogin(self, stale_session_id: str | None) -> None:
         """Re-authenticate once, even if several threads notice the 401 together.
@@ -623,9 +631,13 @@ class HikConnectClient:
 
     @staticmethod
     def _clean_ip(value: str | None) -> str | None:
-        if not value or value in ("0.0.0.0", ""):
+        try:
+            ip = ipaddress.IPv4Address(str(value).strip())
+        except ValueError:
             return None
-        return value
+        if ip.is_unspecified or ip.is_reserved or ip.is_multicast or ip.is_loopback:
+            return None
+        return str(ip)
 
     @staticmethod
     def _parse_support_isapi(support_ext: Any) -> bool:

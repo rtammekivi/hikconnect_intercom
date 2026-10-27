@@ -249,7 +249,7 @@ class _ChannelStream:
         refreshes it every poll, so read it from there.
         """
         st = (self._status.data or {}).get(self._cam.serial) or {}
-        ip = st.get("local_ip") or self._cam.local_ip
+        ip = st.get("local_ip") or self._ip or self._cam.local_ip
         if ip and ip != self._ip:
             if self._ip is not None:
                 _LOGGER.info(

@@ -171,15 +171,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     # Realtime push: a call event just triggers an immediate authoritative poll.
-    unsubs = []
-    for dev in devices:
-        unsubs.append(
-            async_dispatcher_connect(
-                hass,
-                call_signal(dev.serial),
-                lambda *_: hass.async_create_task(coordinator.async_request_refresh()),
-            )
-        )
+    async def _on_call_push(*_) -> None:
+        await coordinator.async_request_refresh()
+
+    unsubs = [
+        async_dispatcher_connect(hass, call_signal(dev.serial), _on_call_push)
+        for dev in devices
+    ]
 
     push = HikConnectPush(
         hass, client._base, entry.data[CONF_ACCOUNT], entry.data[CONF_PASSWORD]
@@ -189,6 +187,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as err:  # noqa: BLE001 - never fail setup on push
         _LOGGER.warning("Hik-Connect push listener failed to start: %s", err)
         push = None
+    else:
+        async def _stop_push(_event) -> None:
+            await push.async_stop()
+
+        entry.async_on_unload(
+            client.add_login_listener(lambda: hass.add_job(push.async_refresh_session))
+        )
+        entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop_push))
 
     longlink = None
     if push is None or push.used_fallback_host:
