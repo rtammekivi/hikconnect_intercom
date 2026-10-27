@@ -17,9 +17,10 @@ SYSTEM_INFO = {"systemConfigInfo": {"pushDasDomain": "das.example", "pushDasPort
 REGISTERED = {"meta": {"code": 200}}
 
 
-def make_listener(replies, on_event=None):
+def make_listener(replies, on_ring=None, on_hangup=None):
     listener = longlink.HikConnectLongLink(
-        SimpleNamespace(), None, "account", "password", "https://api.example", on_event or Mock()
+        SimpleNamespace(), None, "account", "password", "https://api.example",
+        on_ring or Mock(), on_hangup or Mock(),
     )
     listener._http.request = Mock(side_effect=[SimpleNamespace(json=lambda r=r: r, status_code=200) for r in replies])
     return listener
@@ -69,8 +70,8 @@ class LoginTests(unittest.TestCase):
 
 class StartTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_uses_hik_connect_serial_and_saved_state(self):
-        on_event = Mock()
-        listener = make_listener([LOGIN_OK, SYSTEM_INFO, REGISTERED], on_event)
+        on_ring = Mock()
+        listener = make_listener([LOGIN_OK, SYSTEM_INFO, REGISTERED], on_ring)
 
         async def executor(fn, *args):
             return fn(*args)
@@ -86,15 +87,14 @@ class StartTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.credentials_input(), "session-1")
         worker.return_value.start.assert_called_once_with()
         session.on_message(b'{"pushType":2,"soundType":2701,"alert":"Your doorbell is ringing"}')
-        on_event.assert_called_once_with()
+        on_ring.assert_called_once_with()
 
 
 class MessageTests(unittest.TestCase):
-    def test_only_ring_messages_trigger_a_poll(self):
-        on_event = Mock()
-        listener = make_listener([], on_event)
+    def test_ring_and_hang_up_have_their_own_callbacks(self):
+        on_ring, on_hangup = Mock(), Mock()
+        listener = make_listener([], on_ring, on_hangup)
         for payload in (
-            b'{"pushType":3,"alert":"hang up","ext":"3,20,2026-10-27 16:34:22,Q1,0,,2701,4"}',
             b'{"pushType":99}',
             b"{}",
             b"[]",
@@ -102,9 +102,14 @@ class MessageTests(unittest.TestCase):
         ):
             with self.subTest(payload=payload):
                 listener._on_message(payload)
-        on_event.assert_not_called()
+        on_ring.assert_not_called()
+        on_hangup.assert_not_called()
         listener._on_message(b'{"pushType":2,"soundType":2701}')
-        on_event.assert_called_once_with()
+        on_ring.assert_called_once_with()
+        on_hangup.assert_not_called()
+        listener._on_message(b'{"pushType":3,"alert":"hang up","ext":"3,20,2026-10-27 16:34:22,Q1,0,,2701,4"}')
+        on_hangup.assert_called_once_with()
+        on_ring.assert_called_once_with()
 
 
 if __name__ == "__main__":

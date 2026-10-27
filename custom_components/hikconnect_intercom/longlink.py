@@ -36,6 +36,7 @@ _REGISTRATION = {
     "pushExtJson": '{"language":"","protoVer":"2"}',
 }
 _PUSH_RING = 2
+_PUSH_HANGUP = 3
 _SESSION_MAX_AGE = 6 * 3600
 _SAVE_TIMEOUT = 30
 
@@ -58,14 +59,16 @@ class HikConnectLongLink:
         account: str,
         password: str,
         base_url: str,
-        on_event: Callable[[], None],
+        on_ring: Callable[[], None],
+        on_hangup: Callable[[], None],
     ) -> None:
         self._hass = hass
         self._store = store
         self._account = account
         self._password = password
         self._base = base_url.rstrip("/")
-        self._on_event = on_event
+        self._on_ring = on_ring
+        self._on_hangup = on_hangup
         self._feature_code = long_link_feature_code(account)
         self._http = requests.Session()
         self._http.headers.update({**_HEADERS, "featureCode": self._feature_code})
@@ -146,5 +149,9 @@ class HikConnectLongLink:
             message = json.loads(payload)
         except ValueError:
             return
-        if isinstance(message, dict) and message.get("pushType") == _PUSH_RING:
-            self._on_event()
+        if not isinstance(message, dict):
+            return
+        if message.get("pushType") == _PUSH_RING:
+            self._on_ring()
+        elif message.get("pushType") == _PUSH_HANGUP:
+            self._on_hangup()
