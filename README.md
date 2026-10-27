@@ -96,18 +96,26 @@ can still prevent a third channel from opening.
 - **Buttons** — *Answer call* and *Hang up call* (cloud call ops; hang up
   rejects a ringing call and ends an answered one; stations that support it get
   the ISAPI `callSignal` command the app uses),
-  *Unlock all doors* (opens every lock-capable channel at once), and *Sync time*
+  *Unlock all doors* (opens every lock-capable channel at once), *Unlock calling
+  door* (opens the door of the current call, or of a call that ended in the last
+  5 minutes; uses the exact channel from the long-link ring message once that
+  door has rung, otherwise assumes channel `devNo + 1`), and *Sync time*
   (config; sets the station clock to HA's DST-aware local time via ISAPI).
 - **Call status sensor** — `idle` / `ringing` / `call in progress`. State comes
-  from the authoritative cloud poll; a realtime MQTT push event triggers an
-  immediate re-poll so ringing shows in near real time. Its attributes hold
+  from the authoritative cloud poll; a realtime push event (the EZVIZ MQTT
+  push, or the Hik-Connect app's channel-99 long link where the region's push
+  host no longer serves MQTT registration, e.g. EU) triggers an immediate
+  re-poll so ringing shows in near real time. A long-link ring or hang-up
+  message sets `ringing` / `idle` directly, without a poll. Its attributes hold
   the latest caller's `callerInfo` (`buildingNo`, `floorNo`,
   `zoneNo`, `unitNo`, `devNo`, `devType`, `lockNum`).
 - **Doorbell event** — fires `ring` when the call status turns to ringing, with
   the same `callerInfo` fields as event attributes, so rings can be routed per
   door. On a single-unit setup `devNo` is `0` for the main door station and `1`+
   for sub stations; in a multi-door building, ring each door once and check
-  which fields differ:
+  which fields differ. Rings that arrive over the long link fire straight from
+  the push and also carry `channelno`, the calling door's camera/lock channel,
+  and `caller`:
 
   ```yaml
   triggers:
@@ -153,7 +161,8 @@ Built on the shoulders of others — thank you:
 - **[albrzmr/ezviz_hp7](https://github.com/albrzmr/ezviz_hp7)** — original
   reverse-engineering of the CPD7 LAN streaming protocol.
 - **[RenierM26/pyEzvizApi](https://github.com/RenierM26/pyEzvizApi)** — the EZVIZ
-  CAS client (vendored as `lib/cas.py`) and the EZVIZ MQTT push protocol used for
+  CAS client (vendored as `lib/cas.py`), the channel-99 long-link push client
+  (vendored as `lib/longlink/`) and the EZVIZ MQTT push protocol used for
   realtime call events.
 - **[tomasbedrich/home-assistant-hikconnect](https://github.com/tomasbedrich/home-assistant-hikconnect)**
   and its `hikconnect` library — the original Hik-Connect HA integration; the

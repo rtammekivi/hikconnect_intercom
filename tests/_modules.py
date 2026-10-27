@@ -75,3 +75,37 @@ def load_event():
         modules[name] = module
     with patch.dict(sys.modules, modules):
         return load_module("event")
+
+
+def load_longlink():
+    interfaces = {
+        "homeassistant.core": {"HomeAssistant": object},
+        "homeassistant.helpers.storage": {"Store": object},
+    }
+    modules = {}
+    for name, attributes in interfaces.items():
+        module = ModuleType(name)
+        module.__dict__.update(attributes)
+        modules[name] = module
+    with patch.dict(sys.modules, modules):
+        return load_module("longlink")
+
+
+def load_push():
+    interfaces = {
+        "paho": {},
+        "paho.mqtt": {},
+        "paho.mqtt.client": {"Client": object, "MQTTv311": 4},
+        "homeassistant.core": {"HomeAssistant": object},
+        "homeassistant.helpers.aiohttp_client": {"async_get_clientsession": lambda hass: hass.session},
+        "homeassistant.helpers.dispatcher": {"async_dispatcher_send": lambda *a: None},
+    }
+    modules = {}
+    for name, attributes in interfaces.items():
+        module = ModuleType(name)
+        module.__dict__.update(attributes)
+        modules[name] = module
+    modules["paho"].mqtt = modules["paho.mqtt"]
+    modules["paho.mqtt"].client = modules["paho.mqtt.client"]
+    with patch.dict(sys.modules, modules):
+        return load_module("push")

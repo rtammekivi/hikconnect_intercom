@@ -7,11 +7,12 @@ import time
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -26,6 +27,7 @@ from .const import (
     call_signal,
 )
 from .hikconnect_api import HikConnectAuthError, HikConnectClient, HikConnectError
+from .longlink import HikConnectLongLink
 from .push import HikConnectPush
 
 _LOGGER = logging.getLogger(__name__)
@@ -93,7 +95,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         result = await hass.async_add_executor_job(work)
         for serial, polled in result.items():
             current = (coordinator.data or {}).get(serial) or {}
-            if current.get("local_at", 0.0) > polled["polled_at"]:
+            if max(current.get("local_at", 0.0), current.get("pushed_at", 0.0)) > polled["polled_at"]:
                 result[serial] = current
         return result
 
@@ -188,6 +190,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.warning("Hik-Connect push listener failed to start: %s", err)
         push = None
 
+    longlink = None
+    if push is None or push.used_fallback_host:
+        longlink = await _async_start_longlink(hass, entry, client, coordinator)
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "client": client,
         "devices": devices,
@@ -195,11 +201,59 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
         "status_coordinator": status_coordinator,
         "push": push,
+        "longlink": longlink,
         "unsubs": unsubs,
         "quality": {},  # (serial_chN -> MAIN|SUB), shared: select writes, camera reads
     }
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+async def _async_start_longlink(
+    hass: HomeAssistant, entry: ConfigEntry, client: HikConnectClient, coordinator
+) -> HikConnectLongLink | None:
+    @callback
+    def _rang(fields: list[str], caller: dict) -> None:
+        data = dict(coordinator.data or {})
+        serials = [serial for serial in data if serial in fields]
+        if not serials:
+            hass.async_create_task(coordinator.async_request_refresh())
+            return
+        now = time.monotonic()
+        for serial in serials:
+            client.remember_caller_channel(serial, caller)
+            data[serial] = {"status": "ringing", "info": caller, "polled_at": now, "pushed_at": now}
+        coordinator.async_set_updated_data(data)
+
+    @callback
+    def _hung_up(fields: list[str]) -> None:
+        data = dict(coordinator.data or {})
+        serials = [serial for serial in data if serial in fields]
+        for serial in serials:
+            data[serial] = {**data[serial], "status": "idle", "local_at": time.monotonic()}
+        if serials:
+            coordinator.async_set_updated_data(data)
+
+    longlink = HikConnectLongLink(
+        hass,
+        Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.longlink", private=True),
+        entry.data[CONF_ACCOUNT],
+        entry.data[CONF_PASSWORD],
+        client._base,
+        lambda fields, caller: hass.add_job(_rang, fields, caller),
+        lambda fields: hass.add_job(_hung_up, fields),
+    )
+    try:
+        await longlink.async_start()
+    except Exception as err:  # noqa: BLE001 - never fail setup on push
+        _LOGGER.warning("Hik-Connect long-link push failed to start: %s", err)
+        return None
+
+    async def _stop_longlink(_event) -> None:
+        await longlink.async_stop()
+
+    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop_longlink))
+    return longlink
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -212,4 +266,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             push = data.get("push")
             if push is not None:
                 await push.async_stop()
+            longlink = data.get("longlink")
+            if longlink is not None:
+                await longlink.async_stop()
     return unload_ok
