@@ -35,6 +35,23 @@ CONF_CALL_POLL_INTERVAL = "call_poll_interval"
 MIN_CALL_POLL_INTERVAL = 3
 MAX_CALL_POLL_INTERVAL = 60
 
+CONF_NATIVE_STREAM = "native_stream"
+NATIVE_STREAM_OFF = "off"
+NATIVE_STREAM_H264 = "h264"
+NATIVE_STREAM_ALL = "all"
+NATIVE_STREAM_CODECS = {
+    NATIVE_STREAM_OFF: frozenset(),
+    NATIVE_STREAM_H264: frozenset({"h264"}),
+    NATIVE_STREAM_ALL: frozenset({"h264", "hevc"}),
+}
+
+
+def native_stream_mode(options) -> str:
+    mode = options.get(CONF_NATIVE_STREAM, NATIVE_STREAM_H264)
+    if isinstance(mode, bool):
+        return NATIVE_STREAM_H264 if mode else NATIVE_STREAM_OFF
+    return mode if mode in NATIVE_STREAM_CODECS else NATIVE_STREAM_H264
+
 # Device telemetry (online, wifi, firmware, disk) changes slowly — poll gently.
 STATUS_POLL_INTERVAL = 60
 

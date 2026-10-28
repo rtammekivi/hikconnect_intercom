@@ -25,6 +25,9 @@ class HikStreamDecoder:
         self._marker = bytes([0x24, interleave & 255])
         self._buf = bytearray()
         self._out = bytearray()
+        self._au = bytearray()
+        self._au_ts: int | None = None
+        self._units: list[tuple[int, bytes]] = []
         self.codec: str | None = None
         self.requires_key = False
         self._fragment: bytearray | None = None
@@ -64,6 +67,18 @@ class HikStreamDecoder:
         self._out.clear()
         return out
 
+    def take_units(self) -> list[tuple[int, bytes]]:
+        """Complete access units as (90 kHz RTP timestamp, Annex-B bytes)."""
+        units = self._units
+        self._units = []
+        self._out.clear()
+        return units
+
+    def _close_unit(self) -> None:
+        if self._au:
+            self._units.append((self._au_ts, bytes(self._au)))
+            self._au.clear()
+
     def _emit(self, nal: bytes, encrypted: bool) -> None:
         if encrypted:
             self.requires_key = True
@@ -80,6 +95,7 @@ class HikStreamDecoder:
             )
             nal = nal[:header_size] + body if header_size == 2 else body
         self._out.extend(_SC + nal)
+        self._au.extend(_SC + nal)
 
     def _handle_packet(self, packet: bytes) -> None:
         if len(packet) < 26 or packet[12] != 13:
@@ -121,6 +137,10 @@ class HikStreamDecoder:
                 self.codec = "h264"
             else:
                 return
+        ts = int.from_bytes(rtp[4:8], "big")
+        if ts != self._au_ts:
+            self._close_unit()
+            self._au_ts = ts
         seq = int.from_bytes(rtp[2:4], "big")
         if self._last_seq is not None and seq != (self._last_seq + 1) & 65535:
             self._fragment = None
@@ -160,3 +180,5 @@ class HikStreamDecoder:
                 i += n
         elif (hevc and nal_type < 48) or (not hevc and 0 < nal_type < 24):
             self._emit(payload, encrypted)
+        if rtp[1] & 128:
+            self._close_unit()

@@ -1,12 +1,17 @@
 {
   "domain": "hikconnect_intercom",
   "name": "Hik-Connect Intercom",
+  "after_dependencies": [
+    "go2rtc",
+    "stream"
+  ],
   "codeowners": [
     "@rtammekivi"
   ],
   "config_flow": true,
   "dependencies": [
-    "ffmpeg"
+    "ffmpeg",
+    "http"
   ],
   "documentation": "https://github.com/rtammekivi/hikconnect_intercom",
   "integration_type": "hub",

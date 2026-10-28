@@ -27,14 +27,17 @@ from .const import (
     CONF_ACCOUNT,
     CONF_BASE_URL,
     CONF_CALL_POLL_INTERVAL,
+    CONF_NATIVE_STREAM,
     CONF_PASSWORD,
     CONF_SERVER,
     DEFAULT_BASE_URL,
     DOMAIN,
     MAX_CALL_POLL_INTERVAL,
     MIN_CALL_POLL_INTERVAL,
+    NATIVE_STREAM_CODECS,
     SERVER_CUSTOM,
     SERVERS,
+    native_stream_mode,
 )
 from .hikconnect_api import HikConnectAuthError, HikConnectClient
 
@@ -169,16 +172,20 @@ class HikConnectLocalConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class HikConnectOptionsFlow(OptionsFlow):
-    """Tune polling for an existing entry."""
+    """Tune polling and video for an existing entry."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(
-                data={CONF_CALL_POLL_INTERVAL: int(user_input[CONF_CALL_POLL_INTERVAL])}
+                data={
+                    CONF_CALL_POLL_INTERVAL: int(user_input[CONF_CALL_POLL_INTERVAL]),
+                    CONF_NATIVE_STREAM: user_input[CONF_NATIVE_STREAM],
+                }
             )
         current = self.config_entry.options.get(CONF_CALL_POLL_INTERVAL, CALL_POLL_INTERVAL)
+        native = native_stream_mode(self.config_entry.options)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -190,6 +197,13 @@ class HikConnectOptionsFlow(OptionsFlow):
                             step=1,
                             unit_of_measurement="s",
                             mode=NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Required(CONF_NATIVE_STREAM, default=native): SelectSelector(
+                        SelectSelectorConfig(
+                            options=list(NATIVE_STREAM_CODECS),
+                            mode=SelectSelectorMode.LIST,
+                            translation_key=CONF_NATIVE_STREAM,
                         )
                     ),
                 }
