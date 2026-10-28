@@ -47,12 +47,21 @@
         "title": "Hik-Connect Intercom options",
         "data": {
           "call_poll_interval": "Call status poll interval",
-          "native_stream": "Native video stream (H.264 passthrough)"
+          "native_stream": "Live video stream"
         },
         "data_description": {
           "call_poll_interval": "Seconds between cloud call-status polls. Realtime push already reports rings immediately; a shorter interval only helps when push is unavailable, at the cost of more cloud requests.",
-          "native_stream": "Expose the station's own H.264 stream to Home Assistant (WebRTC/HLS, HomeKit Bridge with `video_codec: copy`) instead of transcoding to MJPEG. Lower CPU use and faster start on low-power hardware. H.265 channels always use MJPEG."
+          "native_stream": "Native streams pass the station's own video to Home Assistant (WebRTC/HLS, HomeKit Bridge with `video_codec: copy`) instead of transcoding to MJPEG: lower CPU use and faster start. Most browsers and HomeKit can't play H.265, so H.265 channels use MJPEG unless you include them."
         }
+      }
+    }
+  },
+  "selector": {
+    "native_stream": {
+      "options": {
+        "off": "MJPEG only",
+        "h264": "Native H.264, H.265 as MJPEG",
+        "all": "Native H.264 and H.265"
       }
     }
   }

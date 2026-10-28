@@ -31,12 +31,13 @@ from .const import (
     CONF_PASSWORD,
     CONF_SERVER,
     DEFAULT_BASE_URL,
-    DEFAULT_NATIVE_STREAM,
     DOMAIN,
     MAX_CALL_POLL_INTERVAL,
     MIN_CALL_POLL_INTERVAL,
+    NATIVE_STREAM_CODECS,
     SERVER_CUSTOM,
     SERVERS,
+    native_stream_mode,
 )
 from .hikconnect_api import HikConnectAuthError, HikConnectClient
 
@@ -180,11 +181,11 @@ class HikConnectOptionsFlow(OptionsFlow):
             return self.async_create_entry(
                 data={
                     CONF_CALL_POLL_INTERVAL: int(user_input[CONF_CALL_POLL_INTERVAL]),
-                    CONF_NATIVE_STREAM: bool(user_input.get(CONF_NATIVE_STREAM, DEFAULT_NATIVE_STREAM)),
+                    CONF_NATIVE_STREAM: user_input[CONF_NATIVE_STREAM],
                 }
             )
         current = self.config_entry.options.get(CONF_CALL_POLL_INTERVAL, CALL_POLL_INTERVAL)
-        native = self.config_entry.options.get(CONF_NATIVE_STREAM, DEFAULT_NATIVE_STREAM)
+        native = native_stream_mode(self.config_entry.options)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -198,7 +199,13 @@ class HikConnectOptionsFlow(OptionsFlow):
                             mode=NumberSelectorMode.BOX,
                         )
                     ),
-                    vol.Required(CONF_NATIVE_STREAM, default=native): bool,
+                    vol.Required(CONF_NATIVE_STREAM, default=native): SelectSelector(
+                        SelectSelectorConfig(
+                            options=list(NATIVE_STREAM_CODECS),
+                            mode=SelectSelectorMode.LIST,
+                            translation_key=CONF_NATIVE_STREAM,
+                        )
+                    ),
                 }
             ),
         )

@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from tests._modules import load_camera
+from tests._modules import load_camera, load_module
 
 camera = load_camera()
 
@@ -207,7 +207,7 @@ class FanOutTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PassthroughTests(unittest.IsolatedAsyncioTestCase):
-    def make_camera(self, native=True):
+    def make_camera(self, native=frozenset({"h264"})):
         cam = SimpleNamespace(serial="S", channel=1, slot=1, name="Door", local_ip="192.0.2.1")
         hass = SimpleNamespace(
             config=SimpleNamespace(api=SimpleNamespace(use_ssl=False, port=8123))
@@ -233,10 +233,23 @@ class PassthroughTests(unittest.IsolatedAsyncioTestCase):
         entity.async_write_ha_state.assert_called_once()
 
     async def test_disabled_option_never_streams(self):
-        entity = self.make_camera(native=False)
+        entity = self.make_camera(native=frozenset())
         entity._source._decoder = SimpleNamespace(codec="h264")
         self.assertEqual(entity._features(), camera.CameraEntityFeature(0))
         self.assertIsNone(await entity.stream_source())
+
+    async def test_hevc_streams_natively_when_included(self):
+        entity = self.make_camera(native=frozenset({"h264", "hevc"}))
+        entity._source._decoder = SimpleNamespace(codec="hevc")
+        entity._codec_seen()
+        self.assertEqual(entity._attr_supported_features, camera.CameraEntityFeature.STREAM)
+        self.assertIsNotNone(await entity.stream_source())
+
+    def test_legacy_boolean_option_maps_to_mode(self):
+        const = load_module("const")
+        self.assertEqual(const.native_stream_mode({"native_stream": True}), "h264")
+        self.assertEqual(const.native_stream_mode({"native_stream": False}), "off")
+        self.assertEqual(const.native_stream_mode({}), "h264")
 
 
 if __name__ == "__main__":

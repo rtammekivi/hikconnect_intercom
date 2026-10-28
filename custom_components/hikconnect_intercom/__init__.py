@@ -20,13 +20,12 @@ from .const import (
     CONF_ACCOUNT,
     CONF_BASE_URL,
     CONF_CALL_POLL_INTERVAL,
-    CONF_NATIVE_STREAM,
     CONF_PASSWORD,
     DEFAULT_BASE_URL,
-    DEFAULT_NATIVE_STREAM,
     DOMAIN,
     STATUS_POLL_INTERVAL,
     call_signal,
+    native_stream_mode,
 )
 from .hikconnect_api import HikConnectAuthError, HikConnectClient, HikConnectError
 from .longlink import HikConnectLongLink
@@ -110,11 +109,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     await coordinator.async_config_entry_first_refresh()
 
-    native_stream = entry.options.get(CONF_NATIVE_STREAM, DEFAULT_NATIVE_STREAM)
+    native_stream = native_stream_mode(entry.options)
 
     async def _options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
         coordinator.update_interval = _call_poll_interval(entry)
-        if entry.options.get(CONF_NATIVE_STREAM, DEFAULT_NATIVE_STREAM) != native_stream:
+        if native_stream_mode(entry.options) != native_stream:
             hass.config_entries.async_schedule_reload(entry.entry_id)
 
     entry.async_on_unload(entry.add_update_listener(_options_updated))

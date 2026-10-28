@@ -32,13 +32,13 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
-    CONF_NATIVE_STREAM,
-    DEFAULT_NATIVE_STREAM,
     DOMAIN,
     MJPEG_FPS,
     MJPEG_HEIGHT,
     MJPEG_QUALITY,
     MJPEG_WIDTH,
+    NATIVE_STREAM_CODECS,
+    native_stream_mode,
 )
 from .hikconnect_api import HikCamera
 from .lib.hik_decoder import HikStreamDecoder
@@ -68,7 +68,7 @@ async def async_setup_entry(
     client = data["client"]
     quality = data["quality"]
     status = data["status_coordinator"]
-    native = entry.options.get(CONF_NATIVE_STREAM, DEFAULT_NATIVE_STREAM)
+    native = NATIVE_STREAM_CODECS[native_stream_mode(entry.options)]
     if native and _NATIVE_STREAMS not in hass.data:
         hass.data[_NATIVE_STREAMS] = {}
         hass.http.register_view(_NativeStreamView(hass.data[_NATIVE_STREAMS]))
@@ -620,7 +620,7 @@ class HikLocalCamera(Camera):
         sem: asyncio.Semaphore,
         quality: dict[str, str],
         status,
-        native: bool = False,
+        native: frozenset[str] = frozenset(),
     ) -> None:
         super().__init__()
         self.hass = hass
@@ -641,7 +641,8 @@ class HikLocalCamera(Camera):
         return DeviceInfo(identifiers={(DOMAIN, self._cam.serial)})
 
     def _passthrough(self) -> bool:
-        return self._native and self._source.codec != "hevc"
+        codec = self._source.codec
+        return bool(self._native) and (codec is None or codec in self._native)
 
     def _features(self) -> CameraEntityFeature:
         return CameraEntityFeature.STREAM if self._passthrough() else CameraEntityFeature(0)
