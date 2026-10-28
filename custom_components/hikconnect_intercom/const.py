@@ -35,6 +35,8 @@ CONF_CALL_POLL_INTERVAL = "call_poll_interval"
 MIN_CALL_POLL_INTERVAL = 3
 MAX_CALL_POLL_INTERVAL = 60
 
+CONF_NATIVE_STREAM = "native_stream"
+
 # Device telemetry (online, wifi, firmware, disk) changes slowly — poll gently.
 STATUS_POLL_INTERVAL = 60
 

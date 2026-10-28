@@ -33,8 +33,12 @@ def load_module(name):
 
 def load_camera():
     interfaces = {
-        "homeassistant.components.camera": {"Camera": type("Camera", (), {})},
+        "homeassistant.components.camera": {
+            "Camera": type("Camera", (), {}),
+            "CameraEntityFeature": type("CameraEntityFeature", (), {"STREAM": 2}),
+        },
         "homeassistant.components.ffmpeg": {"get_ffmpeg_manager": lambda hass: None},
+        "homeassistant.components.http": {"HomeAssistantView": object},
         "homeassistant.config_entries": {"ConfigEntry": object},
         "homeassistant.core": {"HomeAssistant": object},
         "homeassistant.helpers.entity": {"DeviceInfo": dict},

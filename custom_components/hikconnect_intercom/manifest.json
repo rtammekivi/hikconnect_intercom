@@ -6,7 +6,8 @@
   ],
   "config_flow": true,
   "dependencies": [
-    "ffmpeg"
+    "ffmpeg",
+    "http"
   ],
   "documentation": "https://github.com/rtammekivi/hikconnect_intercom",
   "integration_type": "hub",

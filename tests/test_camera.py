@@ -80,6 +80,7 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_acquire_forwards_live_timeout(self):
         stream = self.make_stream()
         stream._open = AsyncMock(return_value=True)
+        stream._start_encoder = AsyncMock(return_value=True)
         self.assertTrue(await stream.acquire(camera._LIVE_ACQUIRE_TIMEOUT))
         stream._open.assert_awaited_once_with(camera._LIVE_ACQUIRE_TIMEOUT)
         self.assertEqual(stream._users, 1)
@@ -125,6 +126,84 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
             await camera.HikLocalCamera.handle_async_mjpeg_stream(entity, Mock())
         source.acquire.assert_awaited_once_with(camera._LIVE_ACQUIRE_TIMEOUT)
         source.release.assert_awaited_once()
+
+
+SPS = b"\x00\x00\x00\x01\x67sps"
+PPS = b"\x00\x00\x00\x01\x68pps"
+IDR = b"\x00\x00\x00\x01\x65idr"
+P = b"\x00\x00\x00\x01\x41p"
+
+
+def drain(sink):
+    items = []
+    while not sink.queue.empty():
+        items.append(sink.queue.get_nowait())
+    return items
+
+
+class FanOutTests(unittest.IsolatedAsyncioTestCase):
+    def make_stream(self):
+        cam = SimpleNamespace(serial="S", channel=1, name="Door", local_ip="192.0.2.1")
+        return camera._ChannelStream(None, None, cam, asyncio.Semaphore(1), {}, "q", None)
+
+    async def test_late_sink_starts_at_current_gop(self):
+        stream = self.make_stream()
+        stream._ingest(0, P)
+        stream._ingest(3600, SPS + PPS + IDR)
+        stream._ingest(7200, P)
+        sink = camera._Sink()
+        stream._attach(sink)
+        stream._ingest(10800, P)
+        self.assertEqual(
+            [(ts, h) for _, ts, h in drain(sink)],
+            [(None, SPS + PPS), (3600, SPS + PPS + IDR), (7200, P), (10800, P)],
+        )
+
+    async def test_sink_without_cached_gop_waits_for_keyframe(self):
+        stream = self.make_stream()
+        sink = camera._Sink()
+        stream._attach(sink)
+        stream._ingest(0, P)
+        stream._ingest(3600, SPS + PPS + IDR)
+        self.assertEqual([h for _, _, h in drain(sink)], [SPS + PPS, SPS + PPS + IDR])
+
+    async def test_ended_upstream_reaches_full_sink(self):
+        sink = camera._Sink()
+        for _ in range(camera._FEED_QUEUE_MAX):
+            sink.queue.put_nowait((False, 0, P))
+        camera._ChannelStream._end(sink)
+        self.assertIsNone(drain(sink)[-1])
+
+    async def test_native_subscriber_does_not_start_encoder(self):
+        stream = self.make_stream()
+        stream._open = AsyncMock(side_effect=lambda timeout: setattr(stream, "_lan", object()) or True)
+        stream._start_encoder = AsyncMock(return_value=True)
+        sink = await stream.subscribe(1)
+        self.assertIsNotNone(sink)
+        stream._start_encoder.assert_not_awaited()
+        self.assertIsNone(stream._linger)
+
+    async def test_last_subscriber_leaving_schedules_teardown(self):
+        stream = self.make_stream()
+        stream._open = AsyncMock(side_effect=lambda timeout: setattr(stream, "_lan", object()) or True)
+        sink = await stream.subscribe(1)
+        await stream.unsubscribe(sink)
+        self.assertIsNotNone(stream._linger)
+        stream._linger.cancel()
+
+    async def test_encoder_lingers_off_while_subscriber_stays(self):
+        stream = self.make_stream()
+        stream._lan = object()
+        stream._proc = object()
+        stream._subs.add(camera._Sink())
+        stream._stop_encoder = AsyncMock()
+        stream._teardown = AsyncMock()
+        await stream.release()
+        self.assertIsNotNone(stream._linger)
+        stream._linger.cancel()
+        await stream._linger_teardown()
+        stream._stop_encoder.assert_awaited_once()
+        stream._teardown.assert_not_awaited()
 
 
 if __name__ == "__main__":

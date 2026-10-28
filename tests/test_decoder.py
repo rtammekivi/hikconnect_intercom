@@ -10,8 +10,12 @@ from tests._modules import load_module
 m = load_module("lib.hik_decoder")
 
 
-def packet(nal, seq=0, enc=False):
-    inner = bytes([0x90 if enc else 0x80, 0x60]) + struct.pack(">H", seq) + b"\0" * 8
+def packet(nal, seq=0, enc=False, ts=0, marker=False):
+    inner = (
+        bytes([0x90 if enc else 0x80, 0xE0 if marker else 0x60])
+        + struct.pack(">HI", seq, ts)
+        + b"\0" * 4
+    )
     if enc:
         inner += bytes.fromhex("400000028006000111210201")
     p = b"\x80\x60" + b"\0" * 10 + b"\x0d" + inner + nal
@@ -31,6 +35,20 @@ class DecoderTests(unittest.TestCase):
             d.feed(bytes([v]))
         self.assertEqual(d.codec, "h264")
         self.assertEqual(d.take(), b"\0\0\0\1\x67sps\0\0\0\1\x68pps\0\0\0\1\x65abcdef")
+
+    def test_access_units_follow_marker_and_timestamp(self):
+        d = m.HikStreamDecoder()
+        d.feed(
+            packet(b"\x67sps", 0, ts=100)
+            + packet(b"\x65idr", 1, ts=100, marker=True)
+            + packet(b"\x41p1", 2, ts=3700)
+            + packet(b"\x41p2", 3, ts=7300)
+        )
+        self.assertEqual(
+            d.take_units(),
+            [(100, b"\0\0\0\1\x67sps\0\0\0\1\x65idr"), (3700, b"\0\0\0\1\x41p1")],
+        )
+        self.assertEqual(d.take(), b"")
 
     def test_hevc_encryption(self):
         k = b"TESTKEY"
