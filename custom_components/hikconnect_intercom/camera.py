@@ -69,6 +69,9 @@ async def async_setup_entry(
     quality = data["quality"]
     status = data["status_coordinator"]
     native = NATIVE_STREAM_CODECS[native_stream_mode(entry.options)]
+    if native and not {"go2rtc", "stream"} & hass.config.components:
+        _LOGGER.info("Neither go2rtc nor stream is set up; live video stays MJPEG")
+        native = frozenset()
     if native and _NATIVE_STREAMS not in hass.data:
         hass.data[_NATIVE_STREAMS] = {}
         hass.http.register_view(_NativeStreamView(hass.data[_NATIVE_STREAMS]))

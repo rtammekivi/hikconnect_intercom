@@ -252,5 +252,31 @@ class PassthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(const.native_stream_mode({}), "h264")
 
 
+class SetupTests(unittest.IsolatedAsyncioTestCase):
+    async def setup(self, components, options=None):
+        cam = SimpleNamespace(serial="S", channel=1, slot=1, name="Door", local_ip="192.0.2.1")
+        hass = SimpleNamespace(
+            data={"hikconnect_intercom": {"e": {
+                "client": None, "quality": {}, "status_coordinator": None, "cameras": [cam],
+            }}},
+            config=SimpleNamespace(components=set(components)),
+            http=SimpleNamespace(register_view=Mock()),
+        )
+        entry = SimpleNamespace(entry_id="e", options=options or {})
+        added = []
+        await camera.async_setup_entry(hass, entry, added.extend)
+        return hass, added[0]
+
+    async def test_native_without_stream_or_go2rtc_stays_mjpeg(self):
+        hass, entity = await self.setup({"camera", "ffmpeg"})
+        self.assertEqual(entity._native, frozenset())
+        hass.http.register_view.assert_not_called()
+
+    async def test_native_with_go2rtc(self):
+        hass, entity = await self.setup({"go2rtc"})
+        self.assertEqual(entity._native, frozenset({"h264"}))
+        hass.http.register_view.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
