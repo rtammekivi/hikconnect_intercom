@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.15.0...v0.16.0) (2026-10-28)
+
+
+### Features
+
+* diagnostics with live door station and channel data ([#40](https://github.com/rtammekivi/hikconnect_intercom/issues/40)) ([2dc8e86](https://github.com/rtammekivi/hikconnect_intercom/commit/2dc8e861ca12b04006486dfff18a049c2ed8f1e0))
+
 ## [0.15.0](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.14.1...v0.15.0) (2026-10-28)
 
 
