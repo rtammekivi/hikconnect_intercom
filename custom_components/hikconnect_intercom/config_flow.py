@@ -31,6 +31,7 @@ from .const import (
     CONF_PASSWORD,
     CONF_SERVER,
     DEFAULT_BASE_URL,
+    DEFAULT_NATIVE_STREAM,
     DOMAIN,
     MAX_CALL_POLL_INTERVAL,
     MIN_CALL_POLL_INTERVAL,
@@ -179,11 +180,11 @@ class HikConnectOptionsFlow(OptionsFlow):
             return self.async_create_entry(
                 data={
                     CONF_CALL_POLL_INTERVAL: int(user_input[CONF_CALL_POLL_INTERVAL]),
-                    CONF_NATIVE_STREAM: bool(user_input.get(CONF_NATIVE_STREAM, False)),
+                    CONF_NATIVE_STREAM: bool(user_input.get(CONF_NATIVE_STREAM, DEFAULT_NATIVE_STREAM)),
                 }
             )
         current = self.config_entry.options.get(CONF_CALL_POLL_INTERVAL, CALL_POLL_INTERVAL)
-        native = self.config_entry.options.get(CONF_NATIVE_STREAM, False)
+        native = self.config_entry.options.get(CONF_NATIVE_STREAM, DEFAULT_NATIVE_STREAM)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(

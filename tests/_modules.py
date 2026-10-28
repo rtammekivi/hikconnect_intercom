@@ -4,6 +4,7 @@ Only HA's import-time interfaces are stubbed. Tests exercise the actual decoder,
 cloud client, and camera methods with mocked network/process boundaries.
 """
 
+import enum
 import importlib.util
 import sys
 from pathlib import Path
@@ -34,8 +35,8 @@ def load_module(name):
 def load_camera():
     interfaces = {
         "homeassistant.components.camera": {
-            "Camera": type("Camera", (), {}),
-            "CameraEntityFeature": type("CameraEntityFeature", (), {"STREAM": 2}),
+            "Camera": type("Camera", (), {"entity_id": None}),
+            "CameraEntityFeature": enum.IntFlag("CameraEntityFeature", {"STREAM": 2}),
         },
         "homeassistant.components.ffmpeg": {"get_ffmpeg_manager": lambda hass: None},
         "homeassistant.components.http": {"HomeAssistantView": object},

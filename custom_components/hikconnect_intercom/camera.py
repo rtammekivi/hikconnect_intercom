@@ -33,6 +33,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     CONF_NATIVE_STREAM,
+    DEFAULT_NATIVE_STREAM,
     DOMAIN,
     MJPEG_FPS,
     MJPEG_HEIGHT,
@@ -67,7 +68,7 @@ async def async_setup_entry(
     client = data["client"]
     quality = data["quality"]
     status = data["status_coordinator"]
-    native = entry.options.get(CONF_NATIVE_STREAM, False)
+    native = entry.options.get(CONF_NATIVE_STREAM, DEFAULT_NATIVE_STREAM)
     if native and _NATIVE_STREAMS not in hass.data:
         hass.data[_NATIVE_STREAMS] = {}
         hass.http.register_view(_NativeStreamView(hass.data[_NATIVE_STREAMS]))
@@ -116,9 +117,10 @@ class _ChannelStream:
 
     def __init__(
         self, hass: HomeAssistant, client, cam: HikCamera, sem: asyncio.Semaphore,
-        quality: dict[str, str], qkey: str, status,
+        quality: dict[str, str], qkey: str, status, on_codec=None,
     ) -> None:
         self._hass = hass
+        self._on_codec = on_codec
         self._client = client
         self._cam = cam
         self._sem = sem
@@ -301,6 +303,8 @@ class _ChannelStream:
             return False
         self._lan = lan
         self._decoder = decoder
+        if self._on_codec is not None:
+            self._on_codec()
         self._stopping = False
         self._gop = None
         for ts, unit in decoder.take_units():
@@ -623,19 +627,31 @@ class HikLocalCamera(Camera):
         self._cam = cam
         self._qkey = f"{cam.serial}_ch{cam.channel}"
         self._source = _ChannelStream(
-            hass, client, cam, sem, quality, self._qkey, status
+            hass, client, cam, sem, quality, self._qkey, status, self._codec_seen
         )
         self._last: bytes | None = None
         self._native = native
         self._token = secrets.token_urlsafe(32)
-        if native:
-            self._attr_supported_features = CameraEntityFeature.STREAM
+        self._attr_supported_features = self._features()
         self._attr_name = cam.name
         self._attr_unique_id = f"{DOMAIN}_{cam.serial}_ch{cam.channel}"
 
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(identifiers={(DOMAIN, self._cam.serial)})
+
+    def _passthrough(self) -> bool:
+        return self._native and self._source.codec != "hevc"
+
+    def _features(self) -> CameraEntityFeature:
+        return CameraEntityFeature.STREAM if self._passthrough() else CameraEntityFeature(0)
+
+    def _codec_seen(self) -> None:
+        features = self._features()
+        if features != self._attr_supported_features:
+            self._attr_supported_features = features
+            if self.entity_id:
+                self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -666,7 +682,7 @@ class HikLocalCamera(Camera):
 
     # -- native stream ----------------------------------------------------
     async def stream_source(self) -> str | None:
-        if not self._native:
+        if not self._passthrough():
             return None
         api = self.hass.config.api
         scheme = "https" if api.use_ssl else "http"

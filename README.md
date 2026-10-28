@@ -67,11 +67,12 @@ The integration's **Configure** button sets the call-status poll interval
 (default 10 s, 3–60 s). Realtime push normally reports rings right away; a
 shorter interval only matters when push is unavailable.
 
-**Configure → Native video stream** additionally exposes the station's own
-H.264 stream (muxed to MPEG-TS, never re-encoded) as the camera's stream source, so the
-dashboard uses WebRTC/HLS and HomeKit Bridge can pass it through with
-`video_codec: copy` instead of transcoding MJPEG. Snapshots still come from the
-MJPEG encoder.
+H.264 cameras also expose the station's own stream (muxed to MPEG-TS, never
+re-encoded) as the camera's stream source, so the dashboard uses WebRTC/HLS and
+HomeKit Bridge can pass it through with `video_codec: copy` instead of
+transcoding MJPEG. H.265 channels stay on MJPEG. Snapshots always come from the
+MJPEG encoder. Turn this off under **Configure → Native video stream** to use
+MJPEG everywhere.
 
 ## Recorder video
 

@@ -206,5 +206,38 @@ class FanOutTests(unittest.IsolatedAsyncioTestCase):
         stream._teardown.assert_not_awaited()
 
 
+class PassthroughTests(unittest.IsolatedAsyncioTestCase):
+    def make_camera(self, native=True):
+        cam = SimpleNamespace(serial="S", channel=1, slot=1, name="Door", local_ip="192.0.2.1")
+        hass = SimpleNamespace(
+            config=SimpleNamespace(api=SimpleNamespace(use_ssl=False, port=8123))
+        )
+        entity = camera.HikLocalCamera(hass, None, cam, asyncio.Semaphore(1), {}, None, native)
+        entity.async_write_ha_state = Mock()
+        return entity
+
+    async def test_h264_streams_natively(self):
+        entity = self.make_camera()
+        entity._source._decoder = SimpleNamespace(codec="h264")
+        entity._codec_seen()
+        self.assertEqual(entity._attr_supported_features, camera.CameraEntityFeature.STREAM)
+        self.assertIn("/api/hikconnect_intercom/stream/", await entity.stream_source())
+
+    async def test_hevc_falls_back_to_mjpeg(self):
+        entity = self.make_camera()
+        entity.entity_id = "camera.door"
+        entity._source._decoder = SimpleNamespace(codec="hevc")
+        entity._codec_seen()
+        self.assertEqual(entity._attr_supported_features, camera.CameraEntityFeature(0))
+        self.assertIsNone(await entity.stream_source())
+        entity.async_write_ha_state.assert_called_once()
+
+    async def test_disabled_option_never_streams(self):
+        entity = self.make_camera(native=False)
+        entity._source._decoder = SimpleNamespace(codec="h264")
+        self.assertEqual(entity._features(), camera.CameraEntityFeature(0))
+        self.assertIsNone(await entity.stream_source())
+
+
 if __name__ == "__main__":
     unittest.main()
