@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.0](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.14.1...v0.15.0) (2026-10-28)
+
+
+### Features
+
+* live view now defaults to native H.264 (WebRTC/HLS) instead of MJPEG, including on upgrade; H.265 channels stay on MJPEG. Pick "MJPEG only" under Configure → Live video stream to keep the old behaviour ([#38](https://github.com/rtammekivi/hikconnect_intercom/issues/38)) ([81b2e4b](https://github.com/rtammekivi/hikconnect_intercom/commit/81b2e4ba7a9a570383f2d77f8dc81639ec54ccf2))
+* native H.264 stream source without transcoding ([#38](https://github.com/rtammekivi/hikconnect_intercom/issues/38)) ([81b2e4b](https://github.com/rtammekivi/hikconnect_intercom/commit/81b2e4ba7a9a570383f2d77f8dc81639ec54ccf2))
+
 ## [0.14.1](https://github.com/rtammekivi/hikconnect_intercom/compare/v0.14.0...v0.14.1) (2026-10-27)
 
 
