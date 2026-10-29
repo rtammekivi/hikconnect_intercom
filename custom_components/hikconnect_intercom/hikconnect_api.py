@@ -360,9 +360,12 @@ class HikConnectClient:
         """Return {'status': idle|ringing|call in progress|unknown, 'info': {...}}."""
         r = self._get(f"/v3/devconfig/v1/call/{serial}/status")
         if (r.get("meta") or {}).get("code") != 200:
+            _LOGGER.debug("call status for %s: unexpected reply %s", serial, json.dumps(r)[:500])
             return {"status": "unknown", "info": {}}
         data = json.loads(r["data"])
         status = _CALL_STATUS.get(data.get("callStatus"), "unknown")
+        if status == "unknown":
+            _LOGGER.debug("call status for %s: unmapped state %s", serial, r["data"][:500])
         info = data.get("callerInfo") or {}
         active = status in ("ringing", "call in progress")
         if active:
@@ -547,6 +550,7 @@ class HikConnectClient:
         for entry in j.get("deviceData") or []:
             if serial in entry:
                 return entry[serial] is False  # inverted: false == disturbed/off
+        _LOGGER.debug("dnd for %s: no entry in reply %s", serial, json.dumps(j)[:500])
         return None
 
     def set_dnd(self, serial: str, on: bool) -> None:
