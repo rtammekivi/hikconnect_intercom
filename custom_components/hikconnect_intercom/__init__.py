@@ -6,6 +6,7 @@ import logging
 import time
 from datetime import timedelta
 
+import requests
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant, callback
@@ -24,6 +25,7 @@ from .const import (
     DEFAULT_BASE_URL,
     DOMAIN,
     STATUS_POLL_INTERVAL,
+    STATUS_POLL_TOLERANCE,
     call_signal,
     native_stream_mode,
 )
@@ -118,38 +120,49 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.async_on_unload(entry.add_update_listener(_options_updated))
 
+    status_misses = 0
+
+    def _keep_last_status(reason: str) -> dict[str, dict]:
+        nonlocal status_misses
+        status_misses += 1
+        if status_coordinator.data is None or status_misses > STATUS_POLL_TOLERANCE:
+            raise UpdateFailed(reason)
+        _LOGGER.debug(
+            "%s; keeping last status (%d/%d)", reason, status_misses, STATUS_POLL_TOLERANCE
+        )
+        return status_coordinator.data
+
     def _status_work() -> dict[str, dict]:
+        nonlocal status_misses
         try:
             status = client.get_device_status_map()
-        except HikConnectError as err:
-            raise UpdateFailed(f"status poll failed: {err}") from err
+        except (HikConnectError, requests.RequestException) as err:
+            return _keep_last_status(f"status poll failed: {err}")
         missing = [d.serial for d in devices if d.serial not in status]
         if missing:
             # The cloud answers an expired session with a well-formed 401 and an
             # empty device list, so silence here would read as "no data" forever.
-            raise UpdateFailed(f"cloud returned no data for {', '.join(missing)}")
+            return _keep_last_status(f"cloud returned no data for {', '.join(missing)}")
+        status_misses = 0
         for dev in devices:
-            if dev.locks:
+            if not dev.locks:
+                continue
+            previous = (status_coordinator.data or {}).get(dev.serial) or {}
+            for key, fetch, what in (
+                ("volumes", client.get_audio_volumes, "volume"),
+                ("dnd", client.get_dnd, "dnd"),
+                ("last_ring", client.get_last_ring, "ring history"),
+                ("work_status", client.get_work_status, "work status"),
+                ("operation_time", client.get_operation_time, "operation time"),
+            ):
                 try:
-                    status[dev.serial]["volumes"] = client.get_audio_volumes(dev.serial)
+                    status[dev.serial][key] = fetch(dev.serial)
                 except Exception as err:  # noqa: BLE001
-                    _LOGGER.warning("volume fetch failed for %s: %s", dev.serial, err)
-                try:
-                    status[dev.serial]["dnd"] = client.get_dnd(dev.serial)
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.warning("dnd fetch failed for %s: %s", dev.serial, err)
-                try:
-                    status[dev.serial]["last_ring"] = client.get_last_ring(dev.serial)
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.warning("ring history fetch failed for %s: %s", dev.serial, err)
-                try:
-                    status[dev.serial]["work_status"] = client.get_work_status(dev.serial)
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.warning("work status fetch failed for %s: %s", dev.serial, err)
-                try:
-                    status[dev.serial]["operation_time"] = client.get_operation_time(dev.serial)
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.warning("operation time fetch failed for %s: %s", dev.serial, err)
+                    _LOGGER.warning("%s fetch failed for %s: %s", what, dev.serial, err)
+                    if key in previous:
+                        status[dev.serial][key] = previous[key]
+            if status[dev.serial].get("dnd") is None and previous.get("dnd") is not None:
+                status[dev.serial]["dnd"] = previous["dnd"]
         return status
 
     async def _poll_status() -> dict[str, dict]:
