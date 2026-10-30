@@ -258,6 +258,7 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
         hass = SimpleNamespace(
             data={"hikconnect_intercom": {"e": {
                 "client": None, "quality": {}, "status_coordinator": None, "cameras": [cam],
+                "door_presence": {},
             }}},
             config=SimpleNamespace(components=set(components)),
             http=SimpleNamespace(register_view=Mock()),

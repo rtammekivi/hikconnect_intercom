@@ -26,8 +26,11 @@ async def async_setup_entry(
 ) -> None:
     data = hass.data[DOMAIN][entry.entry_id]
     quality = data["quality"]
+    status = data["status_coordinator"]
+    presence = data["door_presence"]
     async_add_entities(
-        HikStreamQualitySelect(cam, quality) for cam in data["cameras"]
+        HikStreamQualitySelect(cam, quality, status, presence.get(cam.serial))
+        for cam in data["cameras"]
     )
 
 
@@ -37,9 +40,11 @@ class HikStreamQualitySelect(SelectEntity, RestoreEntity):
     _attr_options = list(_OPTION_TO_STREAM)
     _attr_entity_category = EntityCategory.CONFIG
 
-    def __init__(self, cam, quality: dict[str, str]):
+    def __init__(self, cam, quality: dict[str, str], status, presence):
         self._cam = cam
         self._quality = quality
+        self._status = status
+        self._presence = presence
         self._qkey = f"{cam.serial}_ch{cam.slot}"
         self._attr_name = f"{cam.name} stream quality"
         self._attr_unique_id = f"{DOMAIN}_{self._qkey}_quality"
@@ -50,8 +55,14 @@ class HikStreamQualitySelect(SelectEntity, RestoreEntity):
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(identifiers={(DOMAIN, self._cam.serial)})
 
+    @property
+    def available(self) -> bool:
+        return self._presence is None or self._presence.online(self._cam.slot)
+
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        if self._presence is not None:
+            self.async_on_remove(self._status.async_add_listener(self.async_write_ha_state))
         last = await self.async_get_last_state()
         if last and last.state in _OPTION_TO_STREAM:
             self._attr_current_option = last.state

@@ -63,3 +63,26 @@ def slot_for_channel(
         if current == channel:
             return slot
     return None if channel in pins else channel
+
+
+class DoorPresence:
+    """Consecutive door lists each pinned door has been missing from."""
+
+    def __init__(self, pins: dict[int, str], doors: dict[int, dict], tolerance: int) -> None:
+        self._pins = pins
+        self._tolerance = tolerance
+        self._misses: dict[int, int] = {}
+        self._last: dict[int, dict] | None = None
+        self.update(doors)
+
+    def update(self, doors: dict[int, dict]) -> None:
+        if doors is self._last:
+            return
+        self._last = doors
+        present = resolve_slots(self._pins, doors)
+        self._misses = {
+            slot: 0 if slot in present else self._misses.get(slot, 0) + 1 for slot in self._pins
+        }
+
+    def online(self, slot: int) -> bool:
+        return self._misses.get(slot, 0) <= self._tolerance

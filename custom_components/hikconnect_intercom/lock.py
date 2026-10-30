@@ -28,6 +28,7 @@ async def async_setup_entry(
 ) -> None:
     data = hass.data[DOMAIN][entry.entry_id]
     client = data["client"]
+    status = data["status_coordinator"]
     names = {
         (c.serial, c.channel): c.name for c in data["cameras"]
     }
@@ -35,6 +36,7 @@ async def async_setup_entry(
     for dev in data["devices"]:
         pins = data["door_pins"].get(dev.serial, {})
         slots = data["door_slots"].get(dev.serial)
+        presence = data["door_presence"].get(dev.serial)
         for channel, count in sorted(dev.locks.items()):
             slot = channel if slots is None else slot_for_channel(channel, pins, slots)
             if slot is None:
@@ -44,7 +46,7 @@ async def async_setup_entry(
                 entities.append(
                     HikLock(
                         hass, client, dev.serial, channel, lock_index, base,
-                        slot, pins.get(slot),
+                        slot, pins.get(slot), status, presence,
                     )
                 )
     async_add_entities(entities)
@@ -55,7 +57,8 @@ class HikLock(LockEntity):
     _attr_assumed_state = True
 
     def __init__(
-        self, hass, client, serial, channel, lock_index, base_name, slot, door_ip
+        self, hass, client, serial, channel, lock_index, base_name, slot, door_ip,
+        status=None, presence=None,
     ):
         self.hass = hass
         self._client = client
@@ -63,6 +66,9 @@ class HikLock(LockEntity):
         self._channel = channel
         self._lock_index = lock_index
         self._door_ip = door_ip
+        self._slot = slot
+        self._status = status
+        self._presence = presence
         name = f"{base_name} lock"
         if lock_index:
             name += f" {lock_index + 1}"
@@ -73,6 +79,15 @@ class HikLock(LockEntity):
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(identifiers={(DOMAIN, self._serial)})
+
+    @property
+    def available(self) -> bool:
+        return self._presence is None or self._presence.online(self._slot)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if self._presence is not None:
+            self.async_on_remove(self._status.async_add_listener(self.async_write_ha_state))
 
     async def async_lock(self, **kwargs) -> None:
         self._attr_is_locked = True

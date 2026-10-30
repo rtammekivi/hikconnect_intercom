@@ -24,10 +24,18 @@ from .const import (
     DEFAULT_BASE_URL,
     DOMAIN,
     STATUS_POLL_INTERVAL,
+    STATUS_POLL_TOLERANCE,
     call_signal,
     native_stream_mode,
 )
-from .doors import doors_moved, keep_absent, pin_doors, resolve_slots, slot_for_channel
+from .doors import (
+    DoorPresence,
+    doors_moved,
+    keep_absent,
+    pin_doors,
+    resolve_slots,
+    slot_for_channel,
+)
 from .hikconnect_api import HikConnectAuthError, HikConnectClient, HikConnectError
 from .longlink import HikConnectLongLink
 from .push import HikConnectPush
@@ -98,6 +106,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     door_slots = {
         serial: keep_absent(door_pins[serial], resolve_slots(door_pins[serial], found))
+        for serial, found in doors.items()
+    }
+    door_presence = {
+        serial: DoorPresence(door_pins[serial], found, STATUS_POLL_TOLERANCE)
         for serial, found in doors.items()
     }
     bound = []
@@ -211,6 +223,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             found = ((status_coordinator.data or {}).get(serial) or {}).get("doors")
             if found is None:
                 continue
+            door_presence[serial].update(found)
             if doors_moved(door_pins[serial], slots, found):
                 _LOGGER.warning(
                     "Door stations on %s moved channels; reloading (doors %s, slots %s)",
@@ -268,6 +281,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "cameras": cameras,
         "door_pins": door_pins,
         "door_slots": door_slots,
+        "door_presence": door_presence,
         "coordinator": coordinator,
         "status_coordinator": status_coordinator,
         "push": push,

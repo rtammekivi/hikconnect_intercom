@@ -71,6 +71,36 @@ class DoorPinningTests(unittest.TestCase):
         self.assertEqual(doors.slot_for_channel(3, pins, {}), 3)
 
 
+class DoorPresenceTests(unittest.TestCase):
+    def test_door_goes_offline_only_after_tolerated_misses(self):
+        presence = doors.DoorPresence({1: LOBBY, 2: SUB}, {1: _door(LOBBY), 2: _door(SUB)}, 2)
+        for _ in range(2):
+            presence.update({1: _door(LOBBY)})
+            self.assertTrue(presence.online(2))
+        presence.update({1: _door(LOBBY), 2: _door(None)})
+        self.assertFalse(presence.online(2))
+        self.assertTrue(presence.online(1))
+
+    def test_door_back_resets_the_count(self):
+        presence = doors.DoorPresence({1: LOBBY, 2: SUB}, {1: _door(LOBBY)}, 2)
+        presence.update({1: _door(LOBBY)})
+        presence.update({1: _door(LOBBY), 2: _door(SUB)})
+        presence.update({1: _door(LOBBY)})
+        presence.update({1: _door(LOBBY)})
+        self.assertTrue(presence.online(2))
+
+    def test_same_list_again_is_not_another_miss(self):
+        stale = {1: _door(LOBBY)}
+        presence = doors.DoorPresence({1: LOBBY, 2: SUB}, stale, 2)
+        for _ in range(5):
+            presence.update(stale)
+        self.assertTrue(presence.online(2))
+
+    def test_unpinned_slot_is_always_online(self):
+        presence = doors.DoorPresence({1: LOBBY}, {}, 0)
+        self.assertTrue(presence.online(3))
+
+
 class DoorStationListTests(unittest.TestCase):
     def test_parses_watch_point_list(self):
         client = api.HikConnectClient("test-account", "test-password")
