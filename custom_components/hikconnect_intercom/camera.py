@@ -79,7 +79,12 @@ async def async_setup_entry(
     entities = []
     for cam in data["cameras"]:
         sem = sems.setdefault(cam.serial, asyncio.Semaphore(_MAX_STREAMS_PER_DEVICE))
-        entities.append(HikLocalCamera(hass, client, cam, sem, quality, status, native))
+        entities.append(
+            HikLocalCamera(
+                hass, client, cam, sem, quality, status, native,
+                data["door_presence"].get(cam.serial),
+            )
+        )
     async_add_entities(entities)
 
 
@@ -624,11 +629,14 @@ class HikLocalCamera(Camera):
         quality: dict[str, str],
         status,
         native: frozenset[str] = frozenset(),
+        presence=None,
     ) -> None:
         super().__init__()
         self.hass = hass
         self._cam = cam
-        self._qkey = f"{cam.serial}_ch{cam.channel}"
+        self._status = status
+        self._presence = presence
+        self._qkey = f"{cam.serial}_ch{cam.slot}"
         self._source = _ChannelStream(
             hass, client, cam, sem, quality, self._qkey, status, self._codec_seen
         )
@@ -637,11 +645,15 @@ class HikLocalCamera(Camera):
         self._token = secrets.token_urlsafe(32)
         self._attr_supported_features = self._features()
         self._attr_name = cam.name
-        self._attr_unique_id = f"{DOMAIN}_{cam.serial}_ch{cam.channel}"
+        self._attr_unique_id = f"{DOMAIN}_{cam.serial}_ch{cam.slot}"
 
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(identifiers={(DOMAIN, self._cam.serial)})
+
+    @property
+    def available(self) -> bool:
+        return self._presence is None or self._presence.online(self._cam.slot)
 
     def _passthrough(self) -> bool:
         codec = self._source.codec
@@ -659,6 +671,8 @@ class HikLocalCamera(Camera):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        if self._presence is not None:
+            self.async_on_remove(self._status.async_add_listener(self.async_write_ha_state))
         if self._native:
             self.hass.data[_NATIVE_STREAMS][self._token] = self
 

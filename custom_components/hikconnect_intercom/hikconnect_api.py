@@ -76,6 +76,11 @@ class HikCamera:
     channel: int
     name: str
     local_ip: str
+    slot: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.slot is None:
+            self.slot = self.channel
 
 
 class HikConnectError(Exception):
@@ -467,6 +472,27 @@ class HikConnectClient:
             "</AudioOutVlome></AudioOutVolumelist><id>1</id></AudioOut>"
         )
         self.isapi(serial, "PUT", "/ISAPI/System/Audio/AudioOut/channels/1", body)
+
+    def get_door_stations(self, serial: str) -> dict[int, dict]:
+        """channel -> {name, ip, locks} for each door station the station knows."""
+        r = self.isapi(serial, "GET", "/ISAPI/VideoIntercom/WatchPoint?format=json")
+        try:
+            point = json.loads(r.get("data") or "{}")["WatchPoint"]
+            entries = point.get("deviveList", point.get("deviceList"))
+        except (ValueError, TypeError, KeyError, AttributeError):
+            entries = None
+        if not isinstance(entries, list):
+            raise HikConnectError(f"door station list unavailable for {serial}")
+        out: dict[int, dict] = {}
+        for d in entries:
+            if not isinstance(d, dict) or not isinstance(d.get("channelNo"), int):
+                continue
+            out[d["channelNo"]] = {
+                "name": d.get("deviceName") or "",
+                "ip": self._clean_ip(d.get("ipV4Address")),
+                "locks": d.get("lockNum") if isinstance(d.get("lockNum"), int) else 0,
+            }
+        return out
 
     def get_work_status(self, serial: str) -> dict[str, str]:
         r = self.isapi(serial, "GET", "/ISAPI/AccessControl/AcsWorkStatus?format=json")
