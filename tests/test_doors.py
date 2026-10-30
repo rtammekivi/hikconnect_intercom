@@ -29,11 +29,34 @@ class DoorPinningTests(unittest.TestCase):
         self.assertEqual(slots, {5: 2})
         self.assertEqual(doors.slot_for_channel(2, pins, slots), 5)
 
-    def test_offline_door_has_no_entity_on_its_slot(self):
+    def test_offline_door_keeps_its_own_channel(self):
         pins = {2: LOBBY, 5: PARKING}
-        slots = doors.resolve_slots(pins, {5: _door(PARKING)})
-        self.assertNotIn(2, slots)
-        self.assertIsNone(doors.slot_for_channel(2, pins, {**slots}))
+        slots = doors.keep_absent(pins, doors.resolve_slots(pins, {5: _door(PARKING)}))
+        self.assertEqual(slots, {2: 2, 5: 5})
+        self.assertEqual(doors.slot_for_channel(2, pins, slots), 2)
+
+    def test_offline_door_yields_its_channel_to_a_reslotted_door(self):
+        pins = {2: LOBBY, 5: PARKING}
+        slots = doors.keep_absent(pins, doors.resolve_slots(pins, {2: _door(PARKING)}))
+        self.assertEqual(slots, {5: 2})
+        self.assertIsNone(doors.slot_for_channel(5, pins, slots))
+
+    def test_door_dropping_out_is_not_a_move(self):
+        pins, slots = {1: LOBBY, 2: SUB}, {1: 1, 2: 2}
+        self.assertFalse(doors.doors_moved(pins, slots, {1: _door(LOBBY)}))
+        self.assertFalse(doors.doors_moved(pins, slots, {1: _door(LOBBY), 2: _door(None)}))
+        self.assertFalse(doors.doors_moved(pins, slots, {1: _door(LOBBY), 2: _door(SUB)}))
+
+    def test_door_on_another_channel_or_new_door_is_a_move(self):
+        pins, slots = {1: LOBBY, 2: SUB}, {1: 1, 2: 2}
+        self.assertTrue(doors.doors_moved(pins, slots, {1: _door(SUB), 2: _door(LOBBY)}))
+        self.assertTrue(doors.doors_moved(pins, slots, {1: _door(LOBBY), 3: _door(SUB)}))
+        self.assertTrue(doors.doors_moved(pins, slots, {1: _door(LOBBY), 2: _door(PARKING)}))
+
+    def test_door_absent_at_setup_returning_elsewhere_is_a_move(self):
+        pins = {2: LOBBY, 5: PARKING}
+        slots = doors.keep_absent(pins, {5: 2})
+        self.assertTrue(doors.doors_moved(pins, slots, {2: _door(PARKING), 3: _door(LOBBY)}))
 
     def test_new_door_on_a_pinned_channel_gets_a_fresh_slot(self):
         pins = {2: LOBBY, 5: PARKING}

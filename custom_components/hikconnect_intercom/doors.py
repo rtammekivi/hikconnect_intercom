@@ -38,6 +38,19 @@ def resolve_slots(pins: dict[int, str], doors: dict[int, dict]) -> dict[int, int
     }
 
 
+def keep_absent(pins: dict[int, str], slots: dict[int, int]) -> dict[int, int]:
+    """Give each pinned door missing from ``slots`` its own slot's channel, unless taken."""
+    taken = set(slots.values())
+    return {**slots, **{slot: slot for slot in pins if slot not in slots and slot not in taken}}
+
+
+def doors_moved(pins: dict[int, str], slots: dict[int, int], doors: dict[int, dict]) -> bool:
+    """True if a new door appeared or a present door is no longer on its slot's channel."""
+    if pin_doors(pins, doors) != pins:
+        return True
+    return any(slots.get(slot) != channel for slot, channel in resolve_slots(pins, doors).items())
+
+
 def slot_for_channel(
     channel: int, pins: dict[int, str], slots: dict[int, int]
 ) -> int | None:
