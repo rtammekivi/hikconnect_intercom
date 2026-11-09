@@ -319,7 +319,9 @@ class _ChannelStream:
         try:
             proc = await asyncio.create_subprocess_exec(
                 get_ffmpeg_manager(self._hass).binary, "-loglevel", "error",
-                "-fflags", "+discardcorrupt", "-f", self.codec, "-i", "pipe:0",
+                "-fflags", "+discardcorrupt", "-flags", "low_delay",
+                "-probesize", "32768", "-analyzeduration", "100000",
+                "-f", self.codec, "-i", "pipe:0",
                 "-an", "-c:v", "mjpeg", "-q:v", str(MJPEG_QUALITY), "-r", str(MJPEG_FPS),
                 "-vf", f"scale={MJPEG_WIDTH}:{MJPEG_HEIGHT}",
                 "-f", "image2pipe", "pipe:1",
